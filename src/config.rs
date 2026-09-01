@@ -20,8 +20,7 @@ impl Config {
                 .ok()
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(8080),
-            database_url: env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "sqlite::memory:".to_string()),
+            database_url: env::var("DATABASE_URL").unwrap_or_default(),
         }
     }
 }

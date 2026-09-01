@@ -1,9 +1,10 @@
-use looptask::{Config, error::Result, server};
+use looptask::{Config, server};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -12,7 +13,21 @@ async fn main() -> Result<()> {
         .init();
 
     let config = Config::from_env();
-    let app = server::create_router();
+    if config.database_url.trim().is_empty() {
+        return Err(anyhow::anyhow!(
+            "DATABASE_URL is required for the production server"
+        ));
+    }
+    let pool: PgPool = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&config.database_url)
+        .await
+        .map_err(|error| anyhow::anyhow!("failed to connect to PostgreSQL: {error}"))?;
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .map_err(|error| anyhow::anyhow!("failed to apply database migrations: {error}"))?;
+    let app = server::create_router_with_database(pool);
     let addr = format!("{}:{}", config.host, config.port);
 
     info!("starting looptask server on {}", addr);

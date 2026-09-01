@@ -103,14 +103,22 @@ to celld directly.
 The control plane uses passwordless email verification. Configure these values
 in the runtime environment (never in the dashboard or source code):
 
+- `DATABASE_URL` (the Replit PostgreSQL connection provided to the runtime)
 - `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_API_TOKEN` with Cloudflare Email Sending permission
 - `LOOPTASK_EMAIL_FROM` with a verified sender address
 
 The Rust service sends `POST
 /accounts/{account_id}/email/sending/send` through Cloudflare's Email Service
-REST API. Verification codes are stored only as salted hashes and expire after
-10 minutes. Sessions use an HttpOnly cookie.
+REST API. Verification challenges and sessions are persisted in PostgreSQL.
+Codes are stored only as HMACs, expire after 10 minutes, allow at most five
+attempts, and have a 60-second resend cooldown. Sessions store only a hash of
+the opaque cookie token, expire after 30 days, and can be revoked on logout.
+
+`/health`, `/api/v1/ping`, and the authentication endpoints are public. Loop
+template, planning, validation, dispatch, and celld proxy endpoints require a
+valid session cookie. The production binary fails to start when `DATABASE_URL`
+is missing rather than silently falling back to process memory.
 
 ### Loop Task abstraction
 

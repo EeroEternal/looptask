@@ -2,17 +2,21 @@ use axum::{
     Json, Router,
     extract::State,
     http::{
-        HeaderMap, HeaderValue,
+        HeaderMap, HeaderValue, Request,
+        header::HeaderName,
         header::{COOKIE, SET_COOKIE},
     },
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sqlx::PgPool;
 use tower_http::trace::TraceLayer;
 
 use crate::{
-    Result,
+    Error, Result,
     auth::{AuthState, CodeRequest, CodeResponse, CodeVerification, SessionResponse},
     celld,
     loop_catalog::{LoopValidationRequest, LoopValidationResponse},
@@ -24,19 +28,31 @@ pub struct AppState {
     pub auth: AuthState,
 }
 
+impl AppState {
+    pub fn from_database(pool: PgPool) -> Self {
+        Self {
+            auth: AuthState::from_pool(pool),
+        }
+    }
+}
+
 pub fn create_router() -> Router {
     create_router_with_state(AppState::default())
 }
 
+pub fn create_router_with_database(pool: PgPool) -> Router {
+    create_router_with_state(AppState::from_database(pool))
+}
+
+#[doc(hidden)]
+pub async fn create_test_router() -> (Router, String) {
+    let state = AppState::default();
+    let session = state.auth.create_test_session().await;
+    (create_router_with_state(state), session)
+}
+
 pub fn create_router_with_state(state: AppState) -> Router {
-    Router::new()
-        .route("/", get(dashboard))
-        .route("/health", get(health_check))
-        .route("/api/v1/ping", get(ping))
-        .route("/api/v1/auth/request-code", post(request_auth_code))
-        .route("/api/v1/auth/verify-code", post(verify_auth_code))
-        .route("/api/v1/auth/me", get(auth_me))
-        .route("/api/v1/auth/logout", post(logout))
+    let protected = Router::new()
         .route("/api/v1/loop-templates", get(loop_templates))
         .route("/api/v1/loops/validate", post(validate_loop))
         .route("/api/v1/runtime/celld", post(describe_celld_runtime))
@@ -45,6 +61,20 @@ pub fn create_router_with_state(state: AppState) -> Router {
         .route("/api/v1/celld/agents/state", post(celld_agent_state))
         .route("/api/v1/celld/agents/inbox", post(celld_agent_inbox))
         .route("/api/v1/celld/agents/artifacts", post(celld_agent_artifact))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_authenticated_user,
+        ));
+
+    Router::new()
+        .route("/", get(dashboard))
+        .route("/health", get(health_check))
+        .route("/api/v1/ping", get(ping))
+        .route("/api/v1/auth/request-code", post(request_auth_code))
+        .route("/api/v1/auth/verify-code", post(verify_auth_code))
+        .route("/api/v1/auth/me", get(auth_me))
+        .route("/api/v1/auth/logout", post(logout))
+        .merge(protected)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -66,10 +96,17 @@ async fn ping() -> Json<Value> {
 }
 
 async fn request_auth_code(
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(request): Json<CodeRequest>,
 ) -> Result<Json<CodeResponse>> {
-    Ok(Json(state.auth.request_code(&request).await?))
+    let request_ip = request_ip(&headers);
+    Ok(Json(
+        state
+            .auth
+            .request_code(&request, request_ip.as_deref())
+            .await?,
+    ))
 }
 
 async fn verify_auth_code(
@@ -79,7 +116,7 @@ async fn verify_auth_code(
     let (user, session_id) = state.auth.verify_code(&request).await?;
     let mut headers = HeaderMap::new();
     let cookie = format!(
-        "looptask_session={session_id}; Max-Age={}; Path=/; HttpOnly; SameSite=Lax",
+        "looptask_session={session_id}; Max-Age={}; Path=/; HttpOnly; Secure; SameSite=Lax",
         30 * 24 * 60 * 60
     );
     headers.insert(
@@ -96,29 +133,54 @@ async fn verify_auth_code(
     ))
 }
 
-async fn auth_me(headers: HeaderMap, State(state): State<AppState>) -> Json<SessionResponse> {
+async fn auth_me(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<SessionResponse>> {
     let user = state
         .auth
         .session_user(session_cookie(&headers).as_deref())
-        .await
+        .await?
         .map(|authenticated| authenticated.user);
-    Json(SessionResponse {
+    Ok(Json(SessionResponse {
         authenticated: user.is_some(),
         user,
-    })
+    }))
 }
 
-async fn logout(headers: HeaderMap, State(state): State<AppState>) -> (HeaderMap, Json<Value>) {
+async fn logout(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<(HeaderMap, Json<Value>)> {
     state
         .auth
         .remove_session(session_cookie(&headers).as_deref())
-        .await;
+        .await?;
     let mut response = HeaderMap::new();
     response.insert(
         SET_COOKIE,
-        HeaderValue::from_static("looptask_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax"),
+        HeaderValue::from_static(
+            "looptask_session=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax",
+        ),
     );
-    (response, Json(json!({ "loggedOut": true })))
+    Ok((response, Json(json!({ "loggedOut": true }))))
+}
+
+async fn require_authenticated_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    match state
+        .auth
+        .session_user(session_cookie(&headers).as_deref())
+        .await
+    {
+        Ok(Some(_)) => next.run(request).await,
+        Ok(None) => Error::Unauthorized("请先登录后再执行此操作".to_string()).into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
 async fn loop_templates() -> Json<Vec<crate::loop_catalog::LoopTemplate>> {
@@ -142,6 +204,18 @@ fn session_cookie(headers: &HeaderMap) -> Option<String> {
                 (name == "looptask_session" && !value.is_empty()).then(|| value.to_string())
             })
         })
+}
+
+fn request_ip(headers: &HeaderMap) -> Option<String> {
+    let cloudflare_ip = HeaderName::from_static("cf-connecting-ip");
+    headers
+        .get(&cloudflare_ip)
+        .or_else(|| headers.get("x-forwarded-for"))
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 async fn describe_celld_runtime(Json(project): Json<Project>) -> Json<celld::CelldFoundation> {

@@ -6,7 +6,10 @@ use axum::{
     routing::post,
 };
 use http_body_util::BodyExt;
-use looptask::{ProjectConfig, server::create_router};
+use looptask::{
+    ProjectConfig,
+    server::{create_router, create_test_router},
+};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tower::ServiceExt;
@@ -63,13 +66,14 @@ async fn dispatch_loop_enqueues_into_celld_inbox() {
         "agentKey": "docs",
     });
 
-    let app = create_router();
+    let (app, session) = create_test_router().await;
     let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/api/v1/loops/dispatch")
                 .header("content-type", "application/json")
+                .header("cookie", format!("looptask_session={session}"))
                 .body(Body::from(request_body.to_string()))
                 .unwrap(),
         )
@@ -95,13 +99,14 @@ async fn dispatch_loop_rejects_unknown_loop_name() {
         "loopName": "does-not-exist",
     });
 
-    let app = create_router();
+    let (app, session) = create_test_router().await;
     let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/api/v1/loops/dispatch")
                 .header("content-type", "application/json")
+                .header("cookie", format!("looptask_session={session}"))
                 .body(Body::from(request_body.to_string()))
                 .unwrap(),
         )
@@ -115,4 +120,65 @@ async fn dispatch_loop_rejects_unknown_loop_name() {
     assert_eq!(json["accepted"], false);
     assert!(json["loopPlan"].is_null());
     assert!(json["dispatch"].is_null());
+}
+
+#[tokio::test]
+async fn loop_dispatch_requires_authentication() {
+    let response = create_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/loops/dispatch")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn session_is_available_and_logout_revokes_it() {
+    let (app, session) = create_test_router().await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/auth/me")
+                .header("cookie", format!("looptask_session={session}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["authenticated"], true);
+    assert_eq!(json["user"]["email"], "test@example.com");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/logout")
+                .header("cookie", format!("looptask_session={session}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=0")
+    );
 }
