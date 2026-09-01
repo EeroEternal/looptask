@@ -22,12 +22,12 @@
 </head>
 <body>
   <main class="shell">
-    <header><div class="brand"><div class="mark">↻</div><div><div class="eyebrow">Loop Engineering</div><h1>looptask control center</h1></div></div><div class="status"><i class="dot" id="healthDot" aria-hidden="true"></i><span id="healthText">正在连接服务…</span></div></header>
+    <header><div class="brand"><div class="mark">↻</div><div><div class="eyebrow">Loop Engineering</div><h1>looptask control center</h1></div></div><div class="status"><i class="dot" id="healthDot" aria-hidden="true"></i><span id="healthText" aria-live="polite">正在连接服务…</span></div></header>
     <div class="grid">
       <section class="panel">
         <h2>关联 GitHub 仓库</h2><p class="sub">配置项目来源，然后定义一个可重复执行的维护 loop。</p>
         <div class="repo"><div class="repo-icon">◈</div><div><strong id="repoName">尚未关联仓库</strong><span id="repoUrl">输入仓库地址后开始</span></div></div>
-        <label for="repository">GitHub repository URL</label><input id="repository" placeholder="https://github.com/owner/repository" value="https://github.com/EeroEternal/looptask">
+        <label for="repository">GitHub repository URL</label><input id="repository" placeholder="https://github.com/owner/repository">
         <div class="row"><div><label for="project">项目名称</label><input id="project" value="looptask"></div><div><label for="branch">默认分支</label><input id="branch" value="main"></div></div>
         <label for="docs">文档路径 <span class="eyebrow">(逗号分隔)</span></label><input id="docs" value="README.md">
         <label for="source">源码路径 <span class="eyebrow">(逗号分隔)</span></label><input id="source" value="src,tests">
