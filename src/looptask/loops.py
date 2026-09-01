@@ -104,11 +104,14 @@ def architecture_scan(project: Project, loop: Loop, project_root: Path, state: d
     paths = _existing_paths(project_root, project.source_paths) or [project_root]
     findings: list[str] = []
     actions: list[str] = []
+    python_files: list[Path] = []
 
     large_file_limit = int(loop.stop_rules.get("largeFileLines", 500))
     for path in _iter_text_files(paths):
         if ".git" in path.parts or ".looptask" in path.parts:
             continue
+        if path.suffix == ".py":
+            python_files.append(path)
         try:
             with path.open(encoding="utf-8", errors="ignore") as file:
                 line_count = sum(1 for _ in file)
@@ -118,7 +121,6 @@ def architecture_scan(project: Project, loop: Loop, project_root: Path, state: d
             findings.append(f"{_relative(project_root, path)} has {line_count} lines.")
             actions.append("Review large files for possible module extraction.")
 
-    python_files = [path for path in _iter_text_files(paths) if path.suffix == ".py"]
     cycles = _find_python_import_cycles(project_root, python_files)
     for cycle in cycles[:10]:
         findings.append("Python import cycle: " + " -> ".join(cycle))

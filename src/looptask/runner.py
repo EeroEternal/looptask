@@ -79,7 +79,11 @@ def _write_state(path: Path, record: RunRecord) -> None:
 
 def _write_report(report_dir: Path, record: RunRecord) -> Path:
     report_dir.mkdir(parents=True, exist_ok=True)
-    stamp = record.started_at.replace(":", "").replace("-", "")
+    stamp = (
+        record.started_at.replace("+00:00", "Z")
+        .replace(":", "")
+        .replace("-", "")
+    )
     path = report_dir / f"{stamp}-{record.loop_name}.md"
     path.write_text(render_markdown(record), encoding="utf-8")
     return path
@@ -87,4 +91,3 @@ def _write_report(report_dir: Path, record: RunRecord) -> Path:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
-
