@@ -193,18 +193,18 @@ impl CelldClient {
                     "project.celld.internalUrl or publicUrl is required to reach celld".to_string(),
                 )
             })?;
-        Ok(Self::new(base_url))
+        Self::new(base_url)
     }
 
-    pub fn new(base_url: impl Into<String>) -> Self {
+    pub fn new(base_url: impl Into<String>) -> Result<Self> {
         let http = Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
-            .expect("failed to build celld HTTP client");
-        Self {
+            .map_err(|error| Error::Celld(format!("failed to build celld HTTP client: {error}")))?;
+        Ok(Self {
             http,
             base_url: base_url.into(),
-        }
+        })
     }
 
     fn cell_url(&self, agent_cell_id: &str, path_segments: &[&str]) -> Result<reqwest::Url> {

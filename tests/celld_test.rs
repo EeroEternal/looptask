@@ -68,7 +68,7 @@ async fn spawn_mock_celld() -> (String, std::sync::Arc<Mutex<Vec<String>>>) {
 #[tokio::test]
 async fn cell_state_round_trips_through_http() {
     let (base_url, seen_ids) = spawn_mock_celld().await;
-    let client = CelldClient::new(base_url);
+    let client = CelldClient::new(base_url).unwrap();
 
     let state = client.cell_state("looptask/docs-sync/docs").await.unwrap();
 
@@ -85,7 +85,7 @@ async fn cell_state_round_trips_through_http() {
 #[tokio::test]
 async fn enqueue_inbox_sends_event_and_returns_ack() {
     let (base_url, seen_ids) = spawn_mock_celld().await;
-    let client = CelldClient::new(base_url);
+    let client = CelldClient::new(base_url).unwrap();
 
     let event = InboxEvent {
         id: Some("evt-42".to_string()),
@@ -110,7 +110,7 @@ async fn enqueue_inbox_sends_event_and_returns_ack() {
 #[tokio::test]
 async fn record_artifact_sends_metadata_and_returns_ack() {
     let (base_url, seen_ids) = spawn_mock_celld().await;
-    let client = CelldClient::new(base_url);
+    let client = CelldClient::new(base_url).unwrap();
 
     let artifact = ArtifactRecord {
         id: None,
@@ -145,7 +145,7 @@ async fn cell_state_reports_celld_error_on_non_success_status() {
         axum::serve(listener, app).await.unwrap();
     });
 
-    let client = CelldClient::new(format!("http://{addr}"));
+    let client = CelldClient::new(format!("http://{addr}")).unwrap();
     let error = client.cell_state("looptask/docs-sync/docs").await;
 
     assert!(error.is_err());
