@@ -65,6 +65,8 @@ pub struct LoopDefinition {
     pub kind: LoopKind,
     pub goal: String,
     #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
     pub mode: LoopMode,
     #[serde(default)]
     pub trigger: Trigger,
@@ -78,6 +80,79 @@ pub struct LoopDefinition {
     pub stop_rules: StopRules,
     #[serde(default)]
     pub escalation_rules: Vec<String>,
+    #[serde(default)]
+    pub steps: Vec<LoopStep>,
+    #[serde(default)]
+    pub decision_rules: Vec<DecisionRule>,
+    #[serde(default)]
+    pub budget: LoopBudget,
+    #[serde(default)]
+    pub safety: LoopSafety,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopStep {
+    pub id: String,
+    pub title: String,
+    pub purpose: String,
+    #[serde(default)]
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub allowed_paths: Vec<String>,
+    #[serde(default)]
+    pub forbidden_actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionRule {
+    pub signal: String,
+    pub action: String,
+    #[serde(default)]
+    pub evidence_required: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopBudget {
+    #[serde(default = "default_budget_minutes")]
+    pub max_duration_minutes: u32,
+    #[serde(default = "default_budget_calls")]
+    pub max_tool_calls: u32,
+}
+
+impl Default for LoopBudget {
+    fn default() -> Self {
+        Self {
+            max_duration_minutes: default_budget_minutes(),
+            max_tool_calls: default_budget_calls(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopSafety {
+    #[serde(default = "default_protected_branches")]
+    pub protected_branches: Vec<String>,
+    #[serde(default)]
+    pub allowed_paths: Vec<String>,
+    #[serde(default)]
+    pub forbidden_actions: Vec<String>,
+    #[serde(default = "default_cleanup_policy")]
+    pub cleanup_policy: String,
+}
+
+impl Default for LoopSafety {
+    fn default() -> Self {
+        Self {
+            protected_branches: default_protected_branches(),
+            allowed_paths: Vec::new(),
+            forbidden_actions: Vec::new(),
+            cleanup_policy: default_cleanup_policy(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -247,4 +322,20 @@ fn default_max_failures() -> u32 {
 
 fn default_large_file_lines() -> u32 {
     500
+}
+
+fn default_budget_minutes() -> u32 {
+    30
+}
+
+fn default_budget_calls() -> u32 {
+    200
+}
+
+fn default_protected_branches() -> Vec<String> {
+    vec!["main".to_string(), "master".to_string()]
+}
+
+fn default_cleanup_policy() -> String {
+    "remove-worktree; keep-branch-only-when-pr-open".to_string()
 }

@@ -1,6 +1,7 @@
 use looptask::{
     ProjectConfig,
     celld::{ArtifactPlacement, agent_cell_id, artifact_placement, foundation},
+    loop_catalog,
 };
 
 #[test]
@@ -56,4 +57,27 @@ fn large_or_cold_artifacts_go_to_object_storage() {
         artifact_placement(10, false, false),
         ArtifactPlacement::ObjectStorage
     );
+}
+
+#[test]
+fn docs_lifecycle_template_preserves_hard_loop_boundaries() {
+    let template = loop_catalog::find_template("docs-lifecycle-patrol").unwrap();
+    let definition = template.definition;
+
+    assert_eq!(definition.budget.max_duration_minutes, 30);
+    assert_eq!(definition.budget.max_tool_calls, 200);
+    assert!(
+        definition
+            .safety
+            .forbidden_actions
+            .contains(&"merge".to_string())
+    );
+    assert!(
+        definition
+            .safety
+            .allowed_paths
+            .contains(&"docs/**".to_string())
+    );
+    assert_eq!(definition.steps.len(), 6);
+    assert_eq!(definition.decision_rules.len(), 4);
 }

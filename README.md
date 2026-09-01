@@ -68,6 +68,12 @@ The local celld runtime persists Durable Object state under `celld/.celld/dev`.
 
 - `GET /health`
 - `GET /api/v1/ping`
+- `POST /api/v1/auth/request-code`
+- `POST /api/v1/auth/verify-code`
+- `GET /api/v1/auth/me`
+- `POST /api/v1/auth/logout`
+- `GET /api/v1/loop-templates`
+- `POST /api/v1/loops/validate`
 - `POST /api/v1/runtime/celld`
 - `POST /api/v1/loops/plan`
 - `POST /api/v1/loops/dispatch`
@@ -91,6 +97,33 @@ corresponding `AgentCell` Durable Object endpoints
 `POST /agents/{cellId}/artifacts`) for a given `project` and `agentCellId`,
 so operators and other services can inspect or drive a cell without talking
 to celld directly.
+
+### Registration and email verification
+
+The control plane uses passwordless email verification. Configure these values
+in the runtime environment (never in the dashboard or source code):
+
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN` with Cloudflare Email Sending permission
+- `LOOPTASK_EMAIL_FROM` with a verified sender address
+
+The Rust service sends `POST
+/accounts/{account_id}/email/sending/send` through Cloudflare's Email Service
+REST API. Verification codes are stored only as salted hashes and expire after
+10 minutes. Sessions use an HttpOnly cookie.
+
+### Loop Task abstraction
+
+A loop is more than a prompt: it is a typed definition with a goal, ordered
+steps, decision rules, verifiers, budget, safety policy, state policy, and
+cleanup policy. `GET /api/v1/loop-templates` exposes reusable capabilities;
+`POST /api/v1/loops/validate` expands a selected definition into stages and
+guardrails before planning or dispatch.
+
+The built-in `docs-lifecycle-patrol` template captures the common pattern:
+isolate in a fresh worktree, inspect, classify signals, mechanically repair only
+allowlisted paths, verify, open a PR or escalation issue, enforce hard budgets,
+and clean up without ever merging, tagging, or pushing the protected branch.
 
 ## Configuration
 

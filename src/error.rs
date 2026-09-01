@@ -19,6 +19,9 @@ pub enum Error {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+
     #[error("celld request failed: {0}")]
     Celld(String),
 
@@ -31,6 +34,7 @@ impl IntoResponse for Error {
         let (status, message) = match &self {
             Error::NotFound(message) => (StatusCode::NOT_FOUND, message.clone()),
             Error::Config(message) => (StatusCode::BAD_REQUEST, message.clone()),
+            Error::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message.clone()),
             Error::Celld(message) => {
                 error!(error = %message, "celld request failed");
                 (StatusCode::BAD_GATEWAY, message.clone())

@@ -1,5 +1,10 @@
 use axum::{
     Json, Router,
+    extract::State,
+    http::{
+        HeaderMap, HeaderValue,
+        header::{COOKIE, SET_COOKIE},
+    },
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
@@ -7,15 +12,33 @@ use serde_json::{Value, json};
 use tower_http::trace::TraceLayer;
 
 use crate::{
-    Result, celld,
+    Result,
+    auth::{AuthState, CodeRequest, CodeResponse, CodeVerification, SessionResponse},
+    celld,
+    loop_catalog::{LoopValidationRequest, LoopValidationResponse},
     models::{LoopDefinition, Project},
 };
 
+#[derive(Clone, Default)]
+pub struct AppState {
+    pub auth: AuthState,
+}
+
 pub fn create_router() -> Router {
+    create_router_with_state(AppState::default())
+}
+
+pub fn create_router_with_state(state: AppState) -> Router {
     Router::new()
         .route("/", get(dashboard))
         .route("/health", get(health_check))
         .route("/api/v1/ping", get(ping))
+        .route("/api/v1/auth/request-code", post(request_auth_code))
+        .route("/api/v1/auth/verify-code", post(verify_auth_code))
+        .route("/api/v1/auth/me", get(auth_me))
+        .route("/api/v1/auth/logout", post(logout))
+        .route("/api/v1/loop-templates", get(loop_templates))
+        .route("/api/v1/loops/validate", post(validate_loop))
         .route("/api/v1/runtime/celld", post(describe_celld_runtime))
         .route("/api/v1/loops/plan", post(plan_loop))
         .route("/api/v1/loops/dispatch", post(dispatch_loop))
@@ -23,6 +46,7 @@ pub fn create_router() -> Router {
         .route("/api/v1/celld/agents/inbox", post(celld_agent_inbox))
         .route("/api/v1/celld/agents/artifacts", post(celld_agent_artifact))
         .layer(TraceLayer::new_for_http())
+        .with_state(state)
 }
 
 async fn dashboard() -> axum::response::Html<&'static str> {
@@ -39,6 +63,85 @@ async fn health_check() -> Json<Value> {
 
 async fn ping() -> Json<Value> {
     Json(json!({ "message": "pong" }))
+}
+
+async fn request_auth_code(
+    State(state): State<AppState>,
+    Json(request): Json<CodeRequest>,
+) -> Result<Json<CodeResponse>> {
+    Ok(Json(state.auth.request_code(&request).await?))
+}
+
+async fn verify_auth_code(
+    State(state): State<AppState>,
+    Json(request): Json<CodeVerification>,
+) -> Result<(HeaderMap, Json<SessionResponse>)> {
+    let (user, session_id) = state.auth.verify_code(&request).await?;
+    let mut headers = HeaderMap::new();
+    let cookie = format!(
+        "looptask_session={session_id}; Max-Age={}; Path=/; HttpOnly; SameSite=Lax",
+        30 * 24 * 60 * 60
+    );
+    headers.insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&cookie)
+            .map_err(|error| crate::Error::Internal(anyhow::anyhow!(error)))?,
+    );
+    Ok((
+        headers,
+        Json(SessionResponse {
+            authenticated: true,
+            user: Some(user),
+        }),
+    ))
+}
+
+async fn auth_me(headers: HeaderMap, State(state): State<AppState>) -> Json<SessionResponse> {
+    let user = state
+        .auth
+        .session_user(session_cookie(&headers).as_deref())
+        .await
+        .map(|authenticated| authenticated.user);
+    Json(SessionResponse {
+        authenticated: user.is_some(),
+        user,
+    })
+}
+
+async fn logout(headers: HeaderMap, State(state): State<AppState>) -> (HeaderMap, Json<Value>) {
+    state
+        .auth
+        .remove_session(session_cookie(&headers).as_deref())
+        .await;
+    let mut response = HeaderMap::new();
+    response.insert(
+        SET_COOKIE,
+        HeaderValue::from_static("looptask_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax"),
+    );
+    (response, Json(json!({ "loggedOut": true })))
+}
+
+async fn loop_templates() -> Json<Vec<crate::loop_catalog::LoopTemplate>> {
+    Json(crate::loop_catalog::templates())
+}
+
+async fn validate_loop(Json(request): Json<LoopValidationRequest>) -> Json<LoopValidationResponse> {
+    Json(crate::loop_catalog::validate(
+        &request.project,
+        request.loop_name.as_deref(),
+    ))
+}
+
+fn session_cookie(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|cookie| {
+                let (name, value) = cookie.trim().split_once('=')?;
+                (name == "looptask_session" && !value.is_empty()).then(|| value.to_string())
+            })
+        })
 }
 
 async fn describe_celld_runtime(Json(project): Json<Project>) -> Json<celld::CelldFoundation> {
