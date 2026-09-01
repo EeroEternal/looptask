@@ -13,6 +13,7 @@ use crate::{
 
 pub fn create_router() -> Router {
     Router::new()
+        .route("/", get(dashboard))
         .route("/health", get(health_check))
         .route("/api/v1/ping", get(ping))
         .route("/api/v1/runtime/celld", post(describe_celld_runtime))
@@ -22,6 +23,10 @@ pub fn create_router() -> Router {
         .route("/api/v1/celld/agents/inbox", post(celld_agent_inbox))
         .route("/api/v1/celld/agents/artifacts", post(celld_agent_artifact))
         .layer(TraceLayer::new_for_http())
+}
+
+async fn dashboard() -> axum::response::Html<&'static str> {
+    axum::response::Html(include_str!("../static/dashboard.html"))
 }
 
 async fn health_check() -> Json<Value> {
