@@ -583,7 +583,14 @@ pub struct EmailSender {
     client: Client,
     account_id: String,
     api_token: String,
-    from: String,
+    from: SenderAddress,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(untagged)]
+enum SenderAddress {
+    Plain(String),
+    Named { address: String, name: String },
 }
 
 impl EmailSender {
@@ -601,6 +608,7 @@ impl EmailSender {
         let from = env::var("LOOPTASK_EMAIL_FROM").map_err(|_| {
             Error::Config("邮件服务未配置 LOOPTASK_EMAIL_FROM，请设置已验证的发件地址".to_string())
         })?;
+        let from = parse_sender_address(&from)?;
         let client = Client::builder()
             .build()
             .map_err(|error| Error::Internal(anyhow::anyhow!(error)))?;
@@ -634,10 +642,15 @@ impl EmailSender {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         if !status.is_success() {
+            let error_message = cloudflare_error_message(&body);
+            if error_message.contains("email.sending.error.email.invalid") {
+                return Err(Error::Config(
+                    "Cloudflare 拒绝了邮件地址或邮件内容，请确认 LOOPTASK_EMAIL_FROM 是 Cloudflare Email Sending 已验证域名上的地址（例如 noreply@looptask.io），并重新发布服务".to_string(),
+                ));
+            }
             return Err(Error::Config(format!(
                 "Cloudflare 邮件发送失败（{}）：{}",
-                status,
-                cloudflare_error_message(&body)
+                status, error_message
             )));
         }
         let payload: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
@@ -666,6 +679,34 @@ fn cloudflare_error_message(body: &str) -> String {
         })
         .filter(|message| !message.is_empty())
         .unwrap_or_else(|| "未知错误".to_string())
+}
+
+fn parse_sender_address(value: &str) -> Result<SenderAddress> {
+    let sender = value.trim();
+    if sender.is_empty() {
+        return Err(Error::Config(
+            "LOOPTASK_EMAIL_FROM 不能为空，请设置已验证的发件地址".to_string(),
+        ));
+    }
+
+    if let Some(open) = sender.rfind('<') {
+        if sender.ends_with('>') && open > 0 {
+            let name = sender[..open].trim().trim_matches('"').trim();
+            let address = normalize_email(&sender[open + 1..sender.len() - 1])?;
+            if name.is_empty() {
+                return Err(Error::Config(
+                    "LOOPTASK_EMAIL_FROM 的显示名称不能为空".to_string(),
+                ));
+            }
+            return Ok(SenderAddress::Named {
+                address,
+                name: name.to_string(),
+            });
+        }
+    }
+
+    let address = normalize_email(sender.trim_matches('"'))?;
+    Ok(SenderAddress::Plain(address))
 }
 
 fn normalize_email(value: &str) -> Result<String> {
@@ -744,5 +785,34 @@ fn public_user_db_session(user: &DbSessionUser) -> PublicUser {
         email: user.email.clone(),
         display_name: user.display_name.clone(),
         created_at: user.created_at,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SenderAddress, parse_sender_address};
+
+    #[test]
+    fn parses_plain_sender_address() {
+        assert!(matches!(
+            parse_sender_address("noreply@looptask.io"),
+            Ok(SenderAddress::Plain(address)) if address == "noreply@looptask.io"
+        ));
+    }
+
+    #[test]
+    fn parses_named_sender_address_for_cloudflare() {
+        let parsed = parse_sender_address("LoopTask <noreply@looptask.io>").unwrap();
+        let json = serde_json::to_value(parsed).unwrap();
+        assert_eq!(json["address"], "noreply@looptask.io");
+        assert_eq!(json["name"], "LoopTask");
+    }
+
+    #[test]
+    fn accepts_quoted_sender_address() {
+        assert!(matches!(
+            parse_sender_address("\"noreply@looptask.io\""),
+            Ok(SenderAddress::Plain(address)) if address == "noreply@looptask.io"
+        ));
     }
 }
