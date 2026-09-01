@@ -136,6 +136,26 @@ paths are isolated by agent under
 `POST /agents/{agentCellId}/artifacts` endpoint continues to record metadata in
 the AgentCell SQLite database.
 
+## Production deployment topology
+
+The recommended production split is:
+
+```text
+Cloudflare Pages (static/)       frontend dashboard
+Replit Autoscale                 Rust/Axum API
+Cloudflare Workers (celld/)      AgentCell Durable Objects
+Cloudflare R2 (looptask)          cold artifacts
+```
+
+Cloudflare Pages uses `functions/api/[[path]].js` as a same-origin proxy for
+the backend API. Set the Pages environment variable `LOOPTASK_API_ORIGIN` to
+the published Replit backend URL. The Pages project should use `static` as its
+output directory; `_redirects` maps `/` to the dashboard entrypoint.
+
+The Replit deployment builds with `cargo build --release` and runs
+`./target/release/looptask`. The service accepts the deployment-provided
+`PORT`, while local development continues to use `LOOPTASK_PORT`.
+
 ## Safety model
 
 Loops use three modes:

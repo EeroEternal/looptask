@@ -16,6 +16,7 @@ impl Config {
         Self {
             host: env::var("LOOPTASK_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             port: env::var("LOOPTASK_PORT")
+                .or_else(|_| env::var("PORT"))
                 .ok()
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(8080),
