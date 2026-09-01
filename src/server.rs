@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Extension, Path, State},
     http::{
         HeaderMap, HeaderValue, Request,
         header::HeaderName,
@@ -17,21 +17,26 @@ use tower_http::trace::TraceLayer;
 
 use crate::{
     Error, Result,
-    auth::{AuthState, CodeRequest, CodeResponse, CodeVerification, SessionResponse},
+    auth::{
+        AuthState, AuthenticatedUser, CodeRequest, CodeResponse, CodeVerification, SessionResponse,
+    },
     celld,
     loop_catalog::{LoopValidationRequest, LoopValidationResponse},
     models::{LoopDefinition, Project},
+    persistence::{ProjectStore, RunEvent, RunSummary, SavedProject},
 };
 
 #[derive(Clone, Default)]
 pub struct AppState {
     pub auth: AuthState,
+    pub projects: Option<ProjectStore>,
 }
 
 impl AppState {
     pub fn from_database(pool: PgPool) -> Self {
         Self {
-            auth: AuthState::from_pool(pool),
+            auth: AuthState::from_pool(pool.clone()),
+            projects: Some(ProjectStore::new(pool)),
         }
     }
 }
@@ -51,8 +56,19 @@ pub async fn create_test_router() -> (Router, String) {
     (create_router_with_state(state), session)
 }
 
+#[doc(hidden)]
+pub fn create_test_auth_router() -> (Router, AuthState) {
+    let state = AppState::default();
+    let auth = state.auth.clone();
+    (create_router_with_state(state), auth)
+}
+
 pub fn create_router_with_state(state: AppState) -> Router {
     let protected = Router::new()
+        .route("/api/v1/projects", get(list_projects).post(save_project))
+        .route("/api/v1/projects/{project_id}", get(get_project))
+        .route("/api/v1/runs", get(list_runs))
+        .route("/api/v1/runs/{run_id}/events", get(list_run_events))
         .route("/api/v1/loop-templates", get(loop_templates))
         .route("/api/v1/loops/validate", post(validate_loop))
         .route("/api/v1/runtime/celld", post(describe_celld_runtime))
@@ -169,7 +185,7 @@ async fn logout(
 async fn require_authenticated_user(
     State(state): State<AppState>,
     headers: HeaderMap,
-    request: Request<axum::body::Body>,
+    mut request: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
     match state
@@ -177,7 +193,10 @@ async fn require_authenticated_user(
         .session_user(session_cookie(&headers).as_deref())
         .await
     {
-        Ok(Some(_)) => next.run(request).await,
+        Ok(Some(authenticated)) => {
+            request.extensions_mut().insert(authenticated);
+            next.run(request).await
+        }
         Ok(None) => Error::Unauthorized("请先登录后再执行此操作".to_string()).into_response(),
         Err(error) => error.into_response(),
     }
@@ -187,10 +206,82 @@ async fn loop_templates() -> Json<Vec<crate::loop_catalog::LoopTemplate>> {
     Json(crate::loop_catalog::templates())
 }
 
-async fn validate_loop(Json(request): Json<LoopValidationRequest>) -> Json<LoopValidationResponse> {
-    Json(crate::loop_catalog::validate(
-        &request.project,
-        request.loop_name.as_deref(),
+async fn validate_loop(
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+    Json(request): Json<LoopValidationRequest>,
+) -> Result<Json<LoopValidationResponse>> {
+    let validation = crate::loop_catalog::validate(&request.project, request.loop_name.as_deref());
+    if let Some(store) = &state.projects {
+        store
+            .save_project(authenticated.user.id, &request.project)
+            .await?;
+    }
+    Ok(Json(validation))
+}
+
+async fn save_project(
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+    Json(project): Json<Project>,
+) -> Result<Json<SavedProject>> {
+    let store = state
+        .projects
+        .as_ref()
+        .ok_or_else(|| Error::Internal(anyhow::anyhow!("project persistence is unavailable")))?;
+    let project_id = store.save_project(authenticated.user.id, &project).await?;
+    Ok(Json(
+        store.get_project(authenticated.user.id, project_id).await?,
+    ))
+}
+
+async fn list_projects(
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+) -> Result<Json<Vec<crate::persistence::ProjectSummary>>> {
+    let store = state
+        .projects
+        .as_ref()
+        .ok_or_else(|| Error::Internal(anyhow::anyhow!("project persistence is unavailable")))?;
+    Ok(Json(store.list_projects(authenticated.user.id).await?))
+}
+
+async fn get_project(
+    Path(project_id): Path<uuid::Uuid>,
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+) -> Result<Json<SavedProject>> {
+    let store = state
+        .projects
+        .as_ref()
+        .ok_or_else(|| Error::Internal(anyhow::anyhow!("project persistence is unavailable")))?;
+    Ok(Json(
+        store.get_project(authenticated.user.id, project_id).await?,
+    ))
+}
+
+async fn list_runs(
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+) -> Result<Json<Vec<RunSummary>>> {
+    let store = state
+        .projects
+        .as_ref()
+        .ok_or_else(|| Error::Internal(anyhow::anyhow!("run persistence is unavailable")))?;
+    Ok(Json(store.list_runs(authenticated.user.id, 50).await?))
+}
+
+async fn list_run_events(
+    Path(run_id): Path<uuid::Uuid>,
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+) -> Result<Json<Vec<RunEvent>>> {
+    let store = state
+        .projects
+        .as_ref()
+        .ok_or_else(|| Error::Internal(anyhow::anyhow!("run persistence is unavailable")))?;
+    Ok(Json(
+        store.list_run_events(authenticated.user.id, run_id).await?,
     ))
 }
 
@@ -236,21 +327,30 @@ fn build_loop_plan(
         .ok_or_else(|| format!("loop '{loop_name}' not found"))
 }
 
-async fn plan_loop(Json(request): Json<LoopPlanRequest>) -> Json<LoopPlanResponse> {
+async fn plan_loop(
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+    Json(request): Json<LoopPlanRequest>,
+) -> Result<Json<LoopPlanResponse>> {
     let loop_def = match build_loop_plan(&request.project, &request.loop_name) {
         Ok(loop_def) => loop_def,
         Err(reason) => {
-            return Json(LoopPlanResponse {
+            return Ok(Json(LoopPlanResponse {
                 accepted: false,
                 reason,
                 loop_plan: None,
-            });
+            }));
         }
     };
 
+    if let Some(store) = &state.projects {
+        store
+            .save_project(authenticated.user.id, &request.project)
+            .await?;
+    }
     let agent_cell_id = celld::agent_cell_id(&request.project, &loop_def, &request.agent_key);
     let foundation = celld::foundation(&request.project);
-    Json(LoopPlanResponse {
+    Ok(Json(LoopPlanResponse {
         accepted: true,
         reason: "loop can be dispatched to a celld-backed agent cell".to_string(),
         loop_plan: Some(LoopPlan {
@@ -259,13 +359,17 @@ async fn plan_loop(Json(request): Json<LoopPlanRequest>) -> Json<LoopPlanRespons
             agent_cell_id,
             celld: foundation,
         }),
-    })
+    }))
 }
 
 /// Plans a loop and, on acceptance, actually dispatches it by enqueuing a
 /// wakeup event into the target agent cell's celld inbox. This is the
 /// dispatch step described in `README.md`'s outer-loop positioning.
-async fn dispatch_loop(Json(request): Json<LoopPlanRequest>) -> Result<Json<LoopDispatchResponse>> {
+async fn dispatch_loop(
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+    Json(request): Json<LoopPlanRequest>,
+) -> Result<Json<LoopDispatchResponse>> {
     let loop_def = match build_loop_plan(&request.project, &request.loop_name) {
         Ok(loop_def) => loop_def,
         Err(reason) => {
@@ -274,11 +378,65 @@ async fn dispatch_loop(Json(request): Json<LoopPlanRequest>) -> Result<Json<Loop
                 reason,
                 loop_plan: None,
                 dispatch: None,
+                run_id: None,
+                deduplicated: false,
             }));
         }
     };
 
     let agent_cell_id = celld::agent_cell_id(&request.project, &loop_def, &request.agent_key);
+    let generated_idempotency_key;
+    let idempotency_key = match request
+        .idempotency_key
+        .as_deref()
+        .filter(|key| !key.trim().is_empty())
+    {
+        Some(key) => key,
+        None => {
+            generated_idempotency_key = uuid::Uuid::new_v4().to_string();
+            generated_idempotency_key.as_str()
+        }
+    };
+    if idempotency_key.len() > 200 {
+        return Err(Error::Config("idempotencyKey is too long".to_string()));
+    }
+    let prepared_run = if let Some(store) = &state.projects {
+        Some(
+            store
+                .prepare_run(
+                    authenticated.user.id,
+                    &request.project,
+                    &loop_def,
+                    &request.agent_key,
+                    &agent_cell_id,
+                    idempotency_key,
+                )
+                .await?,
+        )
+    } else {
+        None
+    };
+    if let Some(prepared) = &prepared_run {
+        if !prepared.created {
+            let foundation = celld::foundation(&request.project);
+            return Ok(Json(LoopDispatchResponse {
+                accepted: true,
+                reason: "loop already dispatched for this idempotency key".to_string(),
+                loop_plan: Some(LoopPlan {
+                    project: request.project.name.clone(),
+                    loop_def,
+                    agent_cell_id,
+                    celld: foundation,
+                }),
+                dispatch: Some(celld::InboxAck {
+                    accepted: true,
+                    id: format!("run-{}", prepared.id),
+                }),
+                run_id: Some(prepared.id),
+                deduplicated: true,
+            }));
+        }
+    }
     let event = celld::InboxEvent {
         id: None,
         source: "looptask-dispatch".to_string(),
@@ -292,7 +450,18 @@ async fn dispatch_loop(Json(request): Json<LoopPlanRequest>) -> Result<Json<Loop
     };
 
     let client = celld::CelldClient::for_project(&request.project)?;
-    let ack = client.enqueue_inbox(&agent_cell_id, &event).await?;
+    let ack = match client.enqueue_inbox(&agent_cell_id, &event).await {
+        Ok(ack) => ack,
+        Err(error) => {
+            if let (Some(store), Some(prepared)) = (&state.projects, &prepared_run) {
+                store.mark_failed(prepared.id, &error.to_string()).await?;
+            }
+            return Err(error);
+        }
+    };
+    if let (Some(store), Some(prepared)) = (&state.projects, &prepared_run) {
+        store.mark_running(prepared.id, &ack.id).await?;
+    }
 
     let foundation = celld::foundation(&request.project);
     Ok(Json(LoopDispatchResponse {
@@ -305,6 +474,8 @@ async fn dispatch_loop(Json(request): Json<LoopPlanRequest>) -> Result<Json<Loop
             celld: foundation,
         }),
         dispatch: Some(ack),
+        run_id: prepared_run.map(|run| run.id),
+        deduplicated: false,
     }))
 }
 
@@ -343,6 +514,8 @@ pub struct LoopPlanRequest {
     pub loop_name: String,
     #[serde(default = "default_agent_key")]
     pub agent_key: String,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -360,6 +533,8 @@ pub struct LoopDispatchResponse {
     pub reason: String,
     pub loop_plan: Option<LoopPlan>,
     pub dispatch: Option<celld::InboxAck>,
+    pub run_id: Option<uuid::Uuid>,
+    pub deduplicated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

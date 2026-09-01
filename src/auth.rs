@@ -1,4 +1,8 @@
-use std::{collections::HashMap, env, sync::Arc};
+use std::{
+    collections::HashMap,
+    env,
+    sync::{Arc, Mutex},
+};
 
 use chrono::{DateTime, Duration, Utc};
 use hmac::{Hmac, Mac};
@@ -17,10 +21,27 @@ const MAX_CODE_ATTEMPTS: i32 = 5;
 const CODE_COOLDOWN_SECONDS: i64 = 60;
 type HmacSha256 = Hmac<Sha256>;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AuthState {
     inner: Arc<RwLock<AuthStore>>,
     pool: Option<PgPool>,
+    mailer: Mailer,
+}
+
+#[derive(Clone)]
+enum Mailer {
+    Cloudflare,
+    Test(Arc<Mutex<Option<String>>>),
+}
+
+impl Default for AuthState {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(AuthStore::default())),
+            pool: None,
+            mailer: Mailer::Test(Arc::new(Mutex::new(None))),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -142,6 +163,7 @@ impl AuthState {
         Self {
             inner: Arc::new(RwLock::new(AuthStore::default())),
             pool: Some(pool),
+            mailer: Mailer::Cloudflare,
         }
     }
 
@@ -211,7 +233,7 @@ impl AuthState {
         .execute(pool)
         .await?;
 
-        if let Err(error) = EmailSender::from_env()?.send_code(&email, &code).await {
+        if let Err(error) = self.send_code(&email, &code).await {
             let _ = sqlx::query("DELETE FROM auth_challenges WHERE id = $1")
                 .bind(challenge_id)
                 .execute(pool)
@@ -252,7 +274,7 @@ impl AuthState {
         store.pending_codes.insert(email.clone(), pending);
         drop(store);
 
-        EmailSender::from_env()?.send_code(&email, &code).await?;
+        self.send_code(&email, &code).await?;
         Ok(CodeResponse {
             accepted: true,
             message: "验证码已发送，请检查邮箱".to_string(),
@@ -525,6 +547,26 @@ impl AuthState {
             },
         );
         session_token
+    }
+
+    #[doc(hidden)]
+    pub fn test_last_code(&self) -> Option<String> {
+        match &self.mailer {
+            Mailer::Test(code) => code.lock().ok().and_then(|value| value.clone()),
+            Mailer::Cloudflare => None,
+        }
+    }
+
+    async fn send_code(&self, recipient: &str, code: &str) -> Result<()> {
+        match &self.mailer {
+            Mailer::Cloudflare => EmailSender::from_env()?.send_code(recipient, code).await,
+            Mailer::Test(captured) => {
+                if let Ok(mut value) = captured.lock() {
+                    *value = Some(code.to_string());
+                }
+                Ok(())
+            }
+        }
     }
 }
 

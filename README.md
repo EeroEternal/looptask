@@ -72,6 +72,11 @@ The local celld runtime persists Durable Object state under `celld/.celld/dev`.
 - `POST /api/v1/auth/verify-code`
 - `GET /api/v1/auth/me`
 - `POST /api/v1/auth/logout`
+- `GET /api/v1/projects`
+- `POST /api/v1/projects`
+- `GET /api/v1/projects/{projectId}`
+- `GET /api/v1/runs`
+- `GET /api/v1/runs/{runId}/events`
 - `GET /api/v1/loop-templates`
 - `POST /api/v1/loops/validate`
 - `POST /api/v1/runtime/celld`
@@ -97,6 +102,13 @@ corresponding `AgentCell` Durable Object endpoints
 `POST /agents/{cellId}/artifacts`) for a given `project` and `agentCellId`,
 so operators and other services can inspect or drive a cell without talking
 to celld directly.
+
+Projects and Loop definitions are upserted per authenticated user when they
+are saved, validated, planned, or dispatched. Dispatches create durable run
+records and queued/dispatched events in PostgreSQL. Callers may send an
+`idempotencyKey` with dispatch requests to safely retry without enqueueing the
+same run twice. R2 remains the storage location for large Artifact contents;
+PostgreSQL stores their relational metadata and run associations.
 
 ### Registration and email verification
 

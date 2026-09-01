@@ -226,6 +226,13 @@
     .decision { padding: 11px; border: 1px solid var(--warning-soft); background: var(--warning-soft); border-radius: var(--radius); }
     .decision strong { display: block; color: var(--warning); font: 11px ui-monospace, monospace; }
     .decision span { display: block; margin-top: 4px; color: var(--ink-dim); font-size: 11px; }
+    .recent-runs { display: grid; gap: 7px; margin-top: 12px; }
+    .recent-run { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--muted); text-align: left; }
+    .recent-run:hover { border-color: var(--primary); }
+    .recent-run strong, .recent-run span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .recent-run strong { max-width: 145px; font-size: 11px; }
+    .recent-run span { margin-top: 3px; color: var(--ink-faint); font: 10px ui-monospace, monospace; }
+    .recent-run-status { flex: 0 0 auto; color: var(--success); font-size: 10px; }
     .footer-note { margin-top: 23px; color: var(--ink-faint); font-size: 10px; }
     .toast { position: fixed; right: 22px; bottom: 22px; z-index: 10; max-width: min(400px, calc(100vw - 44px)); padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--ink); box-shadow: var(--shadow); transform: translateY(16px); opacity: 0; pointer-events: none; transition: .2s ease; font-size: 12px; }
     .toast.show { transform: translateY(0); opacity: 1; }
@@ -330,13 +337,13 @@
             <div class="section-label">执行阶段</div><div class="stages" id="stages"><div class="empty">选择一个模板查看阶段。</div></div>
             <div class="policy-grid"><div class="policy warning"><strong>时间预算</strong><b id="budgetTime">—</b></div><div class="policy warning"><strong>调用预算</strong><b id="budgetCalls">—</b></div><div class="policy safe"><strong>允许路径</strong><b id="allowedPaths">—</b></div><div class="policy safe"><strong>保护分支</strong><b id="protectedBranches">—</b></div></div>
              <div class="section-label section-label-gap">不可绕过的闸门</div><div class="guardrails" id="guardrails"><div class="empty">模板策略加载后显示。</div></div>
-            <div class="action-bar"><button class="secondary" id="validate">验证完整策略</button><button class="primary" id="plan">预览执行计划</button><button class="primary" id="dispatch">派发 Loop</button></div>
+            <div class="action-bar"><button class="secondary" id="saveProject">保存项目</button><button class="secondary" id="validate">验证完整策略</button><button class="primary" id="plan">预览执行计划</button><button class="primary" id="dispatch">派发 Loop</button></div>
           </div>
         </section>
 
         <section class="panel wide monitor">
           <div class="monitor-main"><div class="run-header"><div><div class="eyebrow">Live run monitor</div><div class="run-title" id="runTitle">还没有运行</div></div><span class="run-status" id="runStatus"><i class="dot"></i>待命</span></div><div class="metrics"><div class="metric"><b id="inbox">—</b><span>Inbox events</span></div><div class="metric"><b id="tasks">—</b><span>Tasks</span></div><div class="metric"><b id="artifacts">—</b><span>Artifacts</span></div></div><div class="section-label">运行事件</div><div class="timeline" id="timeline"><div class="empty">验证或派发之后，运行事件会按最新顺序出现在这里。</div></div><div class="identity">Agent cell identity · <code id="agentIdentity">project / loop / agent</code></div></div>
-          <div class="monitor-side"><div class="side-title">Decision branches</div><div class="decision-list" id="decisions"><div class="empty">选择模板查看决策分支。</div></div><p class="footer-note">Loop 的每个分支都必须留下证据；无法安全判断时，停止并升级给人。</p></div>
+           <div class="monitor-side"><div class="side-title">Recent runs</div><div class="recent-runs" id="recentRuns"><div class="empty">登录后会恢复最近的运行记录。</div></div><div class="side-title" style="margin-top:24px">Decision branches</div><div class="decision-list" id="decisions"><div class="empty">选择模板查看决策分支。</div></div><p class="footer-note">Loop 的每个分支都必须留下证据；无法安全判断时，停止并升级给人。</p></div>
         </section>
       </div>
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -344,7 +351,7 @@
   </div>
   <script>
     const $ = id => document.getElementById(id);
-    const state = { authMode: "register", templates: [], selected: null, monitorTimer: null, codeCooldown: 0 };
+    const state = { authMode: "register", templates: [], selected: null, monitorTimer: null, codeCooldown: 0, dispatchKey: null };
     const DEFAULTS = { durableObjectClass: "AgentCell", artifactBucketPrefix: "agents", hotMessageLimit: 50, maxSteps: 12, maxConsecutiveFailures: 3, largeFileLines: 500 };
     const list = id => $(id).value.split(",").map(value => value.trim()).filter(Boolean);
     const show = (element, visible = true) => { element.hidden = !visible; };
@@ -421,16 +428,54 @@
     async function loadTemplates() { const data = await api("/api/v1/loop-templates", { headers: {} }); state.templates = Array.isArray(data) ? data : []; renderTemplates(); }
     function updateIdentity() { $("agentIdentity").textContent = `${$("project").value || "project"} / ${$("loopName").value || "loop"} / ${$("agentKey").value || "default"}`; $("repoName").textContent = $("repository").value ? ($("project").value || "repository") : "尚未关联仓库"; $("repoUrl").textContent = $("repository").value || "输入仓库地址后开始"; }
     function eventCard(title, detail) { const item = document.createElement("div"); item.className = "event"; item.innerHTML = `<strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span>`; $("timeline").prepend(item); }
-    function runRequest() { return { project: initialProject(), loopName: $("loopName").value, agentKey: $("agentKey").value || "default" }; }
+    function runRequest(includeIdempotencyKey = false) { const request = { project: initialProject(), loopName: $("loopName").value, agentKey: $("agentKey").value || "default" }; if (includeIdempotencyKey) request.idempotencyKey = state.dispatchKey; return request; }
+    async function saveProject() { const button = $("saveProject"); button.disabled = true; try { await api("/api/v1/projects", { method: "POST", body: JSON.stringify(initialProject()) }); $("saveState").textContent = "项目已保存"; toast("项目配置已安全保存。"); } catch (error) { toast("保存失败：" + error.message, true); } finally { button.disabled = false; } }
+    function restoreProject(project) {
+      $("project").value = project.name || ""; $("repository").value = project.repository || ""; $("branch").value = project.defaultBranch || "main";
+      $("stack").value = (project.techStack || []).join(", "); $("docs").value = (project.docs || []).join(", "); $("source").value = (project.sourcePaths || []).join(", ");
+      $("celld").value = project.celld?.publicUrl || "";
+      const loop = project.loops?.[0];
+      if (loop) {
+        const template = state.templates.find(item => item.definition?.name === loop.name);
+        if (template) renderTemplate(template);
+        $("loopName").value = loop.name || ""; $("goal").value = loop.goal || "";
+      }
+      updateIdentity();
+    }
+    function runStatusLabel(status) { return ({ queued: "排队中", running: "运行中", passed: "已通过", failed: "失败", "needs-human": "待人工" }[status] || status); }
+    function renderRuns(runs) {
+      $("recentRuns").innerHTML = runs.length ? runs.slice(0, 6).map(run => `<button class="recent-run" type="button" data-run-id="${escapeHtml(run.id)}"><span><strong>${escapeHtml(run.projectName)} · ${escapeHtml(run.loopName)}</strong><span>${escapeHtml(run.agentCellId)}</span></span><b class="recent-run-status">${escapeHtml(runStatusLabel(run.status))}</b></button>`).join("") : '<div class="empty">还没有持久化的运行记录。</div>';
+      document.querySelectorAll(".recent-run").forEach(button => button.addEventListener("click", () => loadRunEvents(button.dataset.runId)));
+    }
+    async function loadRunEvents(runId) {
+      try {
+        const events = await api(`/api/v1/runs/${encodeURIComponent(runId)}/events`, { headers: {} });
+        $("timeline").innerHTML = "";
+        events.forEach(event => eventCard(event.eventType, JSON.stringify(event.payloadJson)));
+        if (!events.length) $("timeline").innerHTML = '<div class="empty">该运行还没有事件。</div>';
+        toast("已恢复运行事件。");
+      } catch (error) { toast("读取运行记录失败：" + error.message, true); }
+    }
+    async function loadSavedState() {
+      const projects = await api("/api/v1/projects", { headers: {} });
+      if (projects.length) {
+        const saved = await api(`/api/v1/projects/${encodeURIComponent(projects[0].id)}`, { headers: {} });
+        restoreProject(saved.config);
+        $("saveState").textContent = "已恢复保存的项目";
+      }
+      const runs = await api("/api/v1/runs", { headers: {} });
+      renderRuns(runs);
+      if (runs[0]) { $("runTitle").textContent = `${runs[0].loopName} · ${runStatusLabel(runs[0].status)}`; $("runStatus").innerHTML = `<i class="dot ${runs[0].status === "running" ? "live" : ""}"></i>${escapeHtml(runStatusLabel(runs[0].status))}`; }
+    }
     async function validate() { const button = $("validate"); button.disabled = true; try { const data = await api("/api/v1/loops/validate", { method: "POST", body: JSON.stringify({ project: initialProject(), loopName: $("loopName").value }) }); eventCard("策略验证完成", `${data.stages?.length || 0} 个阶段 · ${data.guardrails?.length || 0} 条闸门`); $("saveState").textContent = data.accepted ? "策略已验证" : "策略需要补充"; toast(data.accepted ? "完整策略通过，可以预览或派发。" : "策略未通过，请检查 Loop 定义。", !data.accepted); } catch (error) { toast(error.message, true); } finally { button.disabled = false; } }
     async function plan() { const button = $("plan"); button.disabled = true; try { const data = await api("/api/v1/loops/plan", { method: "POST", body: JSON.stringify(runRequest()) }); if (!data.accepted) throw new Error(data.reason); eventCard("执行计划已生成", `Agent cell · ${data.loopPlan.agentCellId}`); $("runTitle").textContent = `${$("loopName").value} · 计划`; $("runStatus").innerHTML = '<i class="dot live"></i>已规划'; $("saveState").textContent = "计划已生成"; toast("执行计划已生成，确认边界后即可派发。"); } catch (error) { toast(error.message, true); } finally { button.disabled = false; } }
-    async function dispatch() { const button = $("dispatch"); button.disabled = true; try { const data = await api("/api/v1/loops/dispatch", { method: "POST", body: JSON.stringify(runRequest()) }); if (!data.accepted || !data.dispatch?.id) throw new Error(data.reason || "派发响应缺少运行信息"); eventCard("Loop 已派发", `事件 ${data.dispatch.id} · ${data.loopPlan.agentCellId}`); $("runTitle").textContent = `${$("loopName").value} · live`; $("runStatus").innerHTML = '<i class="dot live"></i>运行中'; $("runStatus").classList.add("active"); $("saveState").textContent = "正在运行"; clearInterval(state.monitorTimer); state.monitorTimer = setInterval(poll, 5000); await poll(); toast("Loop 已进入 Agent cell。"); } catch (error) { toast("派发失败：" + error.message, true); } finally { button.disabled = false; } }
+    async function dispatch() { const button = $("dispatch"); button.disabled = true; state.dispatchKey = crypto.randomUUID(); try { const data = await api("/api/v1/loops/dispatch", { method: "POST", body: JSON.stringify(runRequest(true)) }); if (!data.accepted || !data.dispatch?.id) throw new Error(data.reason || "派发响应缺少运行信息"); eventCard("Loop 已派发", `事件 ${data.dispatch.id} · ${data.loopPlan.agentCellId}`); $("runTitle").textContent = `${$("loopName").value} · live`; $("runStatus").innerHTML = '<i class="dot live"></i>运行中'; $("runStatus").classList.add("active"); $("saveState").textContent = "正在运行"; clearInterval(state.monitorTimer); state.monitorTimer = setInterval(poll, 5000); await poll(); await loadSavedState(); toast(data.deduplicated ? "检测到重复派发，已复用原运行。" : "Loop 已进入 Agent cell。"); } catch (error) { toast("派发失败：" + error.message, true); } finally { button.disabled = false; } }
     async function poll() { try { const project = initialProject(); const cellId = `${project.name}/${$("loopName").value}/${$("agentKey").value || "default"}`; const data = await api("/api/v1/celld/agents/state", { method: "POST", body: JSON.stringify({ project, agentCellId: cellId }) }); $("inbox").textContent = data.inbox; $("tasks").textContent = data.tasks; $("artifacts").textContent = data.artifacts; $("healthDot").className = "dot live"; $("healthText").textContent = "服务在线 · 状态已同步"; } catch (_) { $("healthText").textContent = "服务在线 · 等待 celld"; } }
-    async function loadApp() { const me = await api("/api/v1/auth/me", { headers: {} }); if (!me.authenticated) { show($("authScreen"), true); show($("app"), false); return; } show($("authScreen"), false); show($("app"), true); const user = me.user || {}; $("userName").textContent = user.displayName || "Operator"; $("userEmail").textContent = user.email || "—"; $("userAvatar").textContent = (user.displayName || user.email || "O").slice(0, 1).toUpperCase(); try { await loadTemplates(); $("healthDot").className = "dot live"; $("healthText").textContent = "服务在线"; } catch (error) { toast(error.message, true); } updateIdentity(); }
+    async function loadApp() { const me = await api("/api/v1/auth/me", { headers: {} }); if (!me.authenticated) { show($("authScreen"), true); show($("app"), false); return; } show($("authScreen"), false); show($("app"), true); const user = me.user || {}; $("userName").textContent = user.displayName || "Operator"; $("userEmail").textContent = user.email || "—"; $("userAvatar").textContent = (user.displayName || user.email || "O").slice(0, 1).toUpperCase(); try { await loadTemplates(); await loadSavedState(); $("healthDot").className = "dot live"; $("healthText").textContent = "服务在线"; } catch (error) { toast(error.message, true); } updateIdentity(); }
     async function logout() { await api("/api/v1/auth/logout", { method: "POST", body: "{}" }); clearInterval(state.monitorTimer); loadApp(); }
     document.querySelectorAll("[data-auth-mode]").forEach(button => button.addEventListener("click", () => setAuthMode(button.dataset.authMode)));
     $("emailForm").addEventListener("submit", requestCode); $("verifyForm").addEventListener("submit", verifyCode); $("resend").addEventListener("click", resendCode); $("backToEmail").addEventListener("click", () => setAuthMode(state.authMode)); $("logout").addEventListener("click", logout);
-    $("validate").addEventListener("click", validate); $("plan").addEventListener("click", plan); $("dispatch").addEventListener("click", dispatch); $("refreshTemplates").addEventListener("click", () => loadTemplates().catch(error => toast(error.message, true)));
+    $("saveProject").addEventListener("click", saveProject); $("validate").addEventListener("click", validate); $("plan").addEventListener("click", plan); $("dispatch").addEventListener("click", dispatch); $("refreshTemplates").addEventListener("click", () => loadTemplates().catch(error => toast(error.message, true)));
     ["repository", "project", "branch", "agentKey", "loopName"].forEach(id => $(id).addEventListener("input", updateIdentity));
     document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", () => { document.querySelectorAll("[data-view]").forEach(item => item.classList.toggle("active", item === button)); $("viewName").textContent = button.textContent.trim(); if (button.dataset.view !== "workspace") toast("这个视图会在 Loop 运行后承载对应记录。"); }));
     loadApp().catch(error => { show($("authScreen"), true); alertMessage(error.message, true); });

@@ -8,7 +8,7 @@ use axum::{
 use http_body_util::BodyExt;
 use looptask::{
     ProjectConfig,
-    server::{create_router, create_test_router},
+    server::{create_router, create_test_auth_router, create_test_router},
 };
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -181,4 +181,97 @@ async fn session_is_available_and_logout_revokes_it() {
             .unwrap()
             .contains("Max-Age=0")
     );
+}
+
+#[tokio::test]
+async fn email_code_flow_creates_session_and_allows_protected_api() {
+    let (app, auth) = create_test_auth_router();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/request-code")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "email": "operator@example.com",
+                        "purpose": "register",
+                        "displayName": "Operator",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let code = auth.test_last_code().expect("test mailer captured code");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/verify-code")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "email": "operator@example.com",
+                        "purpose": "register",
+                        "displayName": "Operator",
+                        "code": code,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let session_cookie = response
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    assert!(
+        response
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("Secure")
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/loop-templates")
+                .header("cookie", &session_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/logout")
+                .header("cookie", session_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }

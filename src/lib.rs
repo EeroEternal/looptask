@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 pub mod loop_catalog;
 pub mod models;
+pub mod persistence;
 pub mod server;
 
 pub use config::{Config, ProjectConfig};
