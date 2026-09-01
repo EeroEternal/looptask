@@ -4,6 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::json;
+use tracing::error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -27,8 +28,20 @@ impl IntoResponse for Error {
         let (status, message) = match &self {
             Error::NotFound(message) => (StatusCode::NOT_FOUND, message.clone()),
             Error::Config(message) => (StatusCode::BAD_REQUEST, message.clone()),
-            Error::Database(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
-            Error::Internal(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+            Error::Database(error) => {
+                error!(error = %error, "database error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".to_string(),
+                )
+            }
+            Error::Internal(error) => {
+                error!(error = %error, "internal error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".to_string(),
+                )
+            }
         };
 
         let body = Json(json!({

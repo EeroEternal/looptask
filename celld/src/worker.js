@@ -16,9 +16,14 @@ export default {
     const tail = match[2] || "/";
     const id = env.AGENT_CELL.idFromName(agentId);
     const stub = env.AGENT_CELL.get(id);
-    const forwarded = new Request(new URL(tail, request.url), request);
-    forwarded.headers.set("x-looptask-agent-id", agentId);
+    const headers = new Headers(request.headers);
+    headers.set("x-looptask-agent-id", agentId);
+    const forwarded = new Request(new URL(tail, request.url), {
+      method: request.method,
+      headers,
+      body: request.body,
+      redirect: request.redirect,
+    });
     return stub.fetch(forwarded);
   },
 };
-

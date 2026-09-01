@@ -4,7 +4,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::trace::TraceLayer;
 
 use crate::{
     celld,
@@ -18,7 +18,6 @@ pub fn create_router() -> Router {
         .route("/api/v1/runtime/celld", post(describe_celld_runtime))
         .route("/api/v1/loops/plan", post(plan_loop))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
 }
 
 async fn health_check() -> Json<Value> {

@@ -3,7 +3,7 @@
 `looptask` is a Rust Loop Engineering service for AI-assisted development
 maintenance loops.
 
-It follows the `rust-agentic-sekleton` shape: Rust 2024, Axum, Tokio, structured
+It follows the Rust agentic skeleton shape: Rust 2024, Axum, Tokio, structured
 errors, typed configuration, and local quality gates with `cargo fmt`, Clippy,
 and workspace tests.
 
@@ -48,7 +48,7 @@ cargo test --workspace
 Run the Rust service:
 
 ```bash
-cargo run
+LOOPTASK_HOST=127.0.0.1 cargo run
 ```
 
 Run the celld agent runtime locally:
