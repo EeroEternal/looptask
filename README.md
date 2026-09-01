@@ -1,90 +1,119 @@
 # looptask
 
-`looptask` is a lightweight, config-first Loop Engineering runner for personal
-and small-team development projects.
+`looptask` is a Rust Loop Engineering service for AI-assisted development
+maintenance loops.
 
-It is designed for recurring AI-assisted development maintenance loops: discover
-work, call an optional agent command, verify the result, save state, and decide
-whether the loop should stop, report, or escalate to a human.
+It follows the `rust-agentic-sekleton` shape: Rust 2024, Axum, Tokio, structured
+errors, typed configuration, and local quality gates with `cargo fmt`, Clippy,
+and workspace tests.
 
-## What it is
+## Positioning
 
-Loop Engineering shifts work from manually prompting an AI agent turn by turn to
-designing an outer loop that can:
+`looptask` is not a chat UI. It is an outer loop system for development projects:
 
-- discover repeatable project maintenance tasks
-- run a focused agent or analyzer
-- verify the result independently
-- persist state across runs
-- stop safely or escalate when confidence is low
+1. discover recurring maintenance work
+2. dispatch a focused agent
+3. persist agent state across wakeups
+4. verify the result independently
+5. stop, report, open a safe PR, or escalate to a human
 
-`looptask` starts with three practical loops:
+The runtime split is intentional:
 
-1. **Documentation sync**: scan docs and project files for drift signals and
-   produce a report that can guide documentation updates.
-2. **External data sync**: inspect configured external data sources and local
-   cache files before a sync job overwrites project data.
-3. **Architecture decoupling scan**: find large files, cross-module references,
-   and Python import cycles that may indicate coupling hotspots.
+- **Rust service**: project configuration, API, loop planning, verification
+  policy, and operator-facing control plane
+- **celld Durable Object app**: one long-lived cell per agent/loop, with SQLite
+  hot state, inbox, alarms, checkpoints, and artifact metadata
+- **external sandbox**: untrusted code execution, shell commands, dependency
+  installation, and mutable workspaces
 
-## Current MVP
+celld is the agent memory/scheduler foundation, not the security sandbox.
 
-The MVP is a local CLI runner. It reads a project configuration file, executes a
-named loop, optionally runs a configured agent command, runs command verifiers,
-saves loop state, and writes a markdown run report.
+## MVP loop types
 
-```bash
-python -m looptask run --config examples/looptask.json --loop docs-sync
-```
+- **Documentation sync**: keep README, architecture docs, generated docs, and
+  source behavior aligned.
+- **External data sync**: fetch and validate external data before updating local
+  caches or generated assets.
+- **Architecture decoupling scan**: find coupling hotspots and produce
+  human-reviewed suggestions before refactors.
 
-Reports are written to `.looptask/runs/` by default. Loop state is written to
-`.looptask/state/<loop-name>.json` unless overridden in the loop config.
-
-## Install for local development
+## Local development
 
 ```bash
-python -m pip install -e .
-python -m unittest discover -s tests
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --workspace
 ```
 
-The project currently uses only the Python standard library.
+Run the Rust service:
+
+```bash
+cargo run
+```
+
+Run the celld agent runtime locally:
+
+```bash
+cd celld
+celld dev
+```
+
+The local celld runtime persists Durable Object state under `celld/.celld/dev`.
+
+## HTTP API
+
+- `GET /health`
+- `GET /api/v1/ping`
+- `POST /api/v1/runtime/celld`
+- `POST /api/v1/loops/plan`
+
+`POST /api/v1/loops/plan` accepts a project config payload and returns the
+celld-backed agent cell ID and dispatch plan.
 
 ## Configuration
 
-`looptask` is configuration-first. A project config describes:
+See [`examples/looptask.json`](examples/looptask.json).
 
-- project metadata
-- known docs and source paths
+A project config defines:
+
+- repository metadata
+- source and documentation paths
+- celld app directory, bucket, public URL, and Durable Object class
 - external data sources
 - loop definitions
-- optional agent commands
+- agent cell ID template and sandbox requirement
 - verifier commands
 - stop and escalation rules
 
-See [`examples/looptask.json`](examples/looptask.json) for a complete example.
+## State and artifact rules
+
+Cell SQLite stores hot, decision-critical state:
+
+- agent identity and policy
+- current plan, tasks, inbox, and checkpoints
+- short memory summaries
+- artifact IDs, hashes, sizes, previews, and storage URIs
+
+Object storage stores cold or large outputs:
+
+- generated files and patches
+- repository snapshots
+- long logs and full message history
+- external data snapshots
+- sandbox workspaces and build artifacts
+
+Rule of thumb:
+
+> The cell stores who the agent is, what it is doing, and where artifacts live;
+> object storage stores the artifacts themselves.
 
 ## Safety model
 
-Loops should start in one of three modes:
+Loops use three modes:
 
-- `report-only`: analyze and report, but do not modify project files
-- `safe-pr`: allow low-risk generated changes such as docs or cached data
-- `human-gated`: require human approval before making code or architecture
-  changes
+- `report-only`: analyze and report only
+- `safe-pr`: allow low-risk generated changes after verifiers pass
+- `human-gated`: require approval before code or architecture changes
 
-The first implementation intentionally favors reports over automatic code
-changes. A loop should only produce automated changes when its goal and verifier
-are machine-checkable.
-
-## Core concepts
-
-- **Project**: repository metadata, paths, commands, and data sources
-- **Loop**: a repeatable goal with a trigger, agent profile, verifiers, state,
-  stop rules, and escalation rules
-- **Run**: one execution of a loop, including findings, verifier results, and
-  report location
-- **State**: persisted memory from previous runs
-- **Verifier**: an independent check such as tests, lint, build, schema checks,
-  or review commands
-- **Escalation**: rules for asking a human to intervene when risk or uncertainty
-  is too high
+celld should run trusted application code for each fleet. Do not use celld as a
+hostile multi-tenant sandbox for user- or model-generated code.

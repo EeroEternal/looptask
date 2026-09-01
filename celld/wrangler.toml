@@ -1,0 +1,12 @@
+name = "looptask-agent-runtime"
+main = "src/worker.js"
+compatibility_date = "2026-09-01"
+
+[[durable_objects.bindings]]
+name = "AGENT_CELL"
+class_name = "AgentCell"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AgentCell"]
+
