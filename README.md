@@ -70,9 +70,27 @@ The local celld runtime persists Durable Object state under `celld/.celld/dev`.
 - `GET /api/v1/ping`
 - `POST /api/v1/runtime/celld`
 - `POST /api/v1/loops/plan`
+- `POST /api/v1/loops/dispatch`
+- `POST /api/v1/celld/agents/state`
+- `POST /api/v1/celld/agents/inbox`
+- `POST /api/v1/celld/agents/artifacts`
 
 `POST /api/v1/loops/plan` accepts a project config payload and returns the
-celld-backed agent cell ID and dispatch plan.
+celld-backed agent cell ID and dispatch plan, without contacting celld.
+
+`POST /api/v1/loops/dispatch` plans a loop the same way and, when accepted,
+actually dispatches it: it calls the project's celld runtime
+(`project.celld.internalUrl` or `publicUrl`) and enqueues a wakeup event into
+the target agent cell's inbox (`POST /agents/{cellId}/inbox` on the celld
+worker). The response includes the loop plan plus the celld inbox
+acknowledgement.
+
+`POST /api/v1/celld/agents/state`, `.../inbox`, and `.../artifacts` proxy the
+corresponding `AgentCell` Durable Object endpoints
+(`GET /agents/{cellId}/state`, `POST /agents/{cellId}/inbox`,
+`POST /agents/{cellId}/artifacts`) for a given `project` and `agentCellId`,
+so operators and other services can inspect or drive a cell without talking
+to celld directly.
 
 ## Configuration
 

@@ -19,6 +19,9 @@ pub enum Error {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[error("celld request failed: {0}")]
+    Celld(String),
+
     #[error("Internal error: {0}")]
     Internal(#[from] anyhow::Error),
 }
@@ -28,6 +31,10 @@ impl IntoResponse for Error {
         let (status, message) = match &self {
             Error::NotFound(message) => (StatusCode::NOT_FOUND, message.clone()),
             Error::Config(message) => (StatusCode::BAD_REQUEST, message.clone()),
+            Error::Celld(message) => {
+                error!(error = %message, "celld request failed");
+                (StatusCode::BAD_GATEWAY, message.clone())
+            }
             Error::Database(error) => {
                 error!(error = %error, "database error");
                 (

@@ -1,6 +1,12 @@
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::models::{LoopDefinition, Project};
+use crate::{Error, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,4 +102,185 @@ pub fn artifact_placement(
     } else {
         ArtifactPlacement::CellSqlite
     }
+}
+
+/// Hot-state snapshot reported by an `AgentCell` Durable Object, mirroring
+/// `celld/src/agent_cell.js`'s `state()` handler.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellState {
+    pub inbox: u32,
+    pub tasks: u32,
+    pub artifacts: u32,
+}
+
+/// Event enqueued into an agent cell's inbox, matching the JSON body accepted
+/// by `AgentCell.enqueue` (`POST /agents/{id}/inbox`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default = "default_event_source")]
+    pub source: String,
+    #[serde(default)]
+    pub body: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake_at: Option<DateTime<Utc>>,
+}
+
+fn default_event_source() -> String {
+    "looptask".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxAck {
+    pub accepted: bool,
+    pub id: String,
+}
+
+/// Artifact metadata recorded against a cell, matching the JSON body accepted
+/// by `AgentCell.recordArtifact` (`POST /agents/{id}/artifacts`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub kind: String,
+    pub storage_uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactAck {
+    pub recorded: bool,
+    pub id: String,
+}
+
+/// HTTP client for the celld Durable Object app (`celld/src/worker.js`).
+///
+/// Agent cell IDs (e.g. `looptask/docs-sync/docs`) commonly contain `/`.
+/// celld's worker routes `/agents/{id}(/...)` by matching a single path
+/// segment and `decodeURIComponent`-ing it, so the ID must be sent
+/// percent-encoded as one segment (`%2F` for `/`). `Url::path_segments_mut`
+/// does this automatically when the ID is pushed via `.push(...)` instead of
+/// being interpolated into the path string.
+#[derive(Debug, Clone)]
+pub struct CelldClient {
+    http: Client,
+    base_url: String,
+}
+
+impl CelldClient {
+    /// Builds a client from a project's configured celld URL, preferring the
+    /// internal (service-to-service) URL over the public one when both are
+    /// set.
+    pub fn for_project(project: &Project) -> Result<Self> {
+        let base_url = project
+            .celld
+            .internal_url
+            .clone()
+            .or_else(|| project.celld.public_url.clone())
+            .ok_or_else(|| {
+                Error::Config(
+                    "project.celld.internalUrl or publicUrl is required to reach celld".to_string(),
+                )
+            })?;
+        Ok(Self::new(base_url))
+    }
+
+    pub fn new(base_url: impl Into<String>) -> Self {
+        let http = Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("failed to build celld HTTP client");
+        Self {
+            http,
+            base_url: base_url.into(),
+        }
+    }
+
+    fn cell_url(&self, agent_cell_id: &str, path_segments: &[&str]) -> Result<reqwest::Url> {
+        let mut url = reqwest::Url::parse(&self.base_url)
+            .map_err(|error| Error::Config(format!("invalid celld base url: {error}")))?;
+        {
+            let mut segments = url.path_segments_mut().map_err(|()| {
+                Error::Config("celld base url must be an absolute http(s) URL".to_string())
+            })?;
+            segments.pop_if_empty();
+            segments.push("agents").push(agent_cell_id);
+            for segment in path_segments {
+                segments.push(segment);
+            }
+        }
+        Ok(url)
+    }
+
+    /// Fetches the hot-state summary for an agent cell (`GET /state`).
+    pub async fn cell_state(&self, agent_cell_id: &str) -> Result<CellState> {
+        let url = self.cell_url(agent_cell_id, &["state"])?;
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(celld_request_error)?;
+        read_celld_json(response).await
+    }
+
+    /// Enqueues an event into an agent cell's inbox (`POST /inbox`), waking
+    /// the cell via a durable alarm when `event.wake_at` is set.
+    pub async fn enqueue_inbox(&self, agent_cell_id: &str, event: &InboxEvent) -> Result<InboxAck> {
+        let url = self.cell_url(agent_cell_id, &["inbox"])?;
+        let response = self
+            .http
+            .post(url)
+            .json(event)
+            .send()
+            .await
+            .map_err(celld_request_error)?;
+        read_celld_json(response).await
+    }
+
+    /// Records artifact metadata against an agent cell (`POST /artifacts`).
+    pub async fn record_artifact(
+        &self,
+        agent_cell_id: &str,
+        artifact: &ArtifactRecord,
+    ) -> Result<ArtifactAck> {
+        let url = self.cell_url(agent_cell_id, &["artifacts"])?;
+        let response = self
+            .http
+            .post(url)
+            .json(artifact)
+            .send()
+            .await
+            .map_err(celld_request_error)?;
+        read_celld_json(response).await
+    }
+}
+
+fn celld_request_error(error: reqwest::Error) -> Error {
+    Error::Celld(format!("failed to reach celld: {error}"))
+}
+
+async fn read_celld_json<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> Result<T> {
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::Celld(format!(
+            "celld responded with {status}: {body}"
+        )));
+    }
+    response
+        .json::<T>()
+        .await
+        .map_err(|error| Error::Celld(format!("invalid celld response body: {error}")))
 }
