@@ -129,6 +129,13 @@ Rule of thumb:
 > The cell stores who the agent is, what it is doing, and where artifacts live;
 > object storage stores the artifacts themselves.
 
+The Cloudflare Worker binds the `looptask` R2 bucket as `ARTIFACTS`. Object
+paths are isolated by agent under
+`agents/{project}/{loop}/{agent}/artifacts/{name}`. Use `PUT` and `GET` on
+`/agents/{agentCellId}/artifacts/{name}` for object bytes; the existing
+`POST /agents/{agentCellId}/artifacts` endpoint continues to record metadata in
+the AgentCell SQLite database.
+
 ## Safety model
 
 Loops use three modes:

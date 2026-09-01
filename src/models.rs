@@ -155,7 +155,7 @@ impl Default for StatePolicy {
     fn default() -> Self {
         Self {
             hot_sqlite_scope: "agent-cell".to_string(),
-            artifact_uri_prefix: "r2://agents/{agent}/artifacts/".to_string(),
+            artifact_uri_prefix: "r2://looptask/agents/{agent}/artifacts/".to_string(),
             hot_message_limit: 50,
         }
     }

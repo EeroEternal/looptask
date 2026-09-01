@@ -8,7 +8,7 @@
     "sourcePaths": ["src", "tests", "celld/src"],
     "celld": {
       "appDir": "celld",
-      "bucket": null,
+      "bucket": "looptask",
       "publicUrl": "http://127.0.0.1:9876",
       "internalUrl": null,
       "durableObjectClass": "AgentCell",
@@ -47,7 +47,7 @@
         ],
         "state": {
           "hotSqliteScope": "agent-cell",
-          "artifactUriPrefix": "r2://agents/{agent}/artifacts/",
+          "artifactUriPrefix": "r2://looptask/agents/{agent}/artifacts/",
           "hotMessageLimit": 50
         },
         "stopRules": {
