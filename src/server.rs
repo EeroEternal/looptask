@@ -2,17 +2,18 @@ use axum::{
     Json, Router,
     extract::{Extension, Path, State},
     http::{
-        HeaderMap, HeaderValue, Request,
+        HeaderMap, HeaderValue, Request, StatusCode,
         header::HeaderName,
         header::{COOKIE, SET_COOKIE},
     },
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::PgPool;
+use std::path::Path as FilePath;
 use tower_http::trace::TraceLayer;
 
 use crate::{
@@ -91,12 +92,56 @@ pub fn create_router_with_state(state: AppState) -> Router {
         .route("/api/v1/auth/me", get(auth_me))
         .route("/api/v1/auth/logout", post(logout))
         .merge(protected)
+        .route("/{*path}", get(static_asset))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 
-async fn dashboard() -> axum::response::Html<&'static str> {
-    axum::response::Html(include_str!("../static/dashboard.html"))
+async fn dashboard() -> std::result::Result<Html<String>, StatusCode> {
+    tokio::fs::read_to_string("web/out/index.html")
+        .await
+        .map(Html)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
+}
+
+async fn static_asset(Path(path): Path<String>) -> Response {
+    if path.split('/').any(|segment| segment == "..") {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let relative_path = if path.ends_with('/') {
+        format!("{path}index.html")
+    } else {
+        path
+    };
+    let file_path = FilePath::new("web/out").join(&relative_path);
+    let Ok(contents) = tokio::fs::read(&file_path).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static(content_type(&file_path)),
+        )],
+        contents,
+    )
+        .into_response()
+}
+
+fn content_type(path: &FilePath) -> &'static str {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("css") => "text/css; charset=utf-8",
+        Some("js") => "application/javascript; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("woff") | Some("woff2") => "font/woff2",
+        Some("html") => "text/html; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
 async fn health_check() -> Json<Value> {

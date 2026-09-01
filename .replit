@@ -24,7 +24,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "LOOPTASK_HOST=0.0.0.0 LOOPTASK_PORT=5000 cargo run"
+args = "npm --prefix web run build && LOOPTASK_HOST=0.0.0.0 LOOPTASK_PORT=5000 cargo run"
 waitForPort = 5000
 
 [workflows.workflow.metadata]
@@ -37,4 +37,4 @@ externalPort = 80
 [deployment]
 deploymentTarget = "autoscale"
 run = ["./target/release/looptask"]
-build = ["cargo", "build", "--release"]
+build = ["bash", "scripts/build.sh"]

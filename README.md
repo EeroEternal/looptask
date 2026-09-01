@@ -194,7 +194,7 @@ the AgentCell SQLite database.
 The recommended production split is:
 
 ```text
-Cloudflare Pages (static/)       frontend dashboard
+Cloudflare Pages (web/out/)      frontend dashboard
 Replit Autoscale                 Rust/Axum API
 Cloudflare Workers (celld/)      AgentCell Durable Objects
 Cloudflare R2 (looptask)          cold artifacts
@@ -202,11 +202,15 @@ Cloudflare R2 (looptask)          cold artifacts
 
 Cloudflare Pages uses `functions/api/[[path]].js` as a same-origin proxy for
 the backend API. Set the Pages environment variable `LOOPTASK_API_ORIGIN` to
-the published Replit backend URL. The Pages project should use `static` as its
-output directory; `_redirects` maps `/` to the dashboard entrypoint.
+the published Replit backend URL. The Pages project should use `web/out` as its
+output directory. The Next.js application in `web/` uses a static export, so it
+keeps the Pages deployment simple while providing a component-based frontend
+for future capabilities. `functions/api/[[path]].js` remains the same-origin
+API proxy.
 
-The Replit deployment builds with `cargo build --release` and runs
-`./target/release/looptask`. The service accepts the deployment-provided
+The Replit deployment builds the Next.js static export first and then runs
+`cargo build --release` through `scripts/build.sh`; the Rust service reads
+`web/out/index.html` at runtime. It runs `./target/release/looptask` and accepts the deployment-provided
 `PORT`, while local development continues to use `LOOPTASK_PORT`.
 
 ## Safety model

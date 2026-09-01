@@ -58,7 +58,7 @@ Always load this file (Overview + Hard rules + PR checklist below). Then open **
 
 ## Scope
 
-Applies to all user-facing frontend surfaces in this repository, including `static/*.html`, any future `admin/src/*` application, and frontend assets or components added elsewhere. In the current project, `static/` is a standalone frontend entry: it is not compiled from `admin/src`, and `static/dashboard.html` is served directly by the Rust application and used as the Cloudflare Pages site source. The implementation technology may differ, but the layout, hierarchy, accessibility, responsive, and visual rules apply consistently. Third-party internals and code-highlight themes are out of scope for wrapper-controlled styling only.
+Applies to all user-facing frontend surfaces in this repository, including `web/app/*`, `web/components/*`, any future `admin/src/*` application, and frontend assets or components added elsewhere. In the current project, `web/` is the Next.js frontend source, and its static export in `web/out/` is served by the Rust application and deployed to Cloudflare Pages. The implementation technology may differ, but the layout, hierarchy, accessibility, responsive, and visual rules apply consistently. Third-party internals and code-highlight themes are out of scope for wrapper-controlled styling only.
 
 ## Hard rules
 

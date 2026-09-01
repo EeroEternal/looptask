@@ -1,6 +1,10 @@
 .looptask/
 .celld/
 target/
+node_modules/
+web/.next/
+web/out/
+web/tsconfig.tsbuildinfo
 __pycache__/
 *.py[cod]
 *.egg-info/
