@@ -3,9 +3,13 @@
 `looptask` is a Rust Loop Engineering service for AI-assisted development
 maintenance loops.
 
-It follows the Rust agentic skeleton shape: Rust 2024, Axum, Tokio, structured
-errors, typed configuration, and local quality gates with `cargo fmt`, Clippy,
-and workspace tests.
+It follows the [rust-agentic-skeleton](https://github.com/EeroEternal/rust-agentic-skeleton)
+shape: Rust 2024, Axum, Tokio, structured errors, typed configuration, and
+local quality gates with `cargo fmt`, Clippy, and workspace tests.
+
+AI coding agents working in this repository must start at
+[`AGENTS.md`](AGENTS.md) for the collaboration spec, standing constraints,
+and reusable skills under [`.agents/skills/`](.agents/skills/).
 
 ## Positioning
 
