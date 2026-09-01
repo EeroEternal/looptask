@@ -33,3 +33,12 @@ celld dev
 The Rust service can run without celld for dashboard, health, ping, planning,
 and other non-dispatch functionality. Loop dispatch and Agent cell monitoring
 require a running celld endpoint configured in the project payload.
+
+## Admin UI design system
+
+The dashboard follows the imported `docs/design.md` specification from
+`rust-agentic-skeleton`. Use the semantic tokens and rules in `docs/design/`
+for future UI work, especially `tokens.md`, `layout.md`, `components.md`, and
+`dos-donts.md`. Keep the console dense and operational: neutral surfaces, one
+primary accent, explicit status colors, restrained radius/shadows, and stable
+reserved space for dynamic content.
