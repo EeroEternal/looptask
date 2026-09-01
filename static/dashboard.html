@@ -4,62 +4,641 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>looptask · Loop Control Center</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232744A5'/%3E%3Cpath d='M9 10a9 9 0 1 1-1 11M9 6v5h5M16 11v5l3 2' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
   <style>
-    :root { color-scheme: dark; --bg:#09111f; --panel:#111d31; --line:#263956; --text:#e9f1ff; --muted:#91a4c2; --accent:#62e6c5; --blue:#78a9ff; --danger:#ff8c9e; }
-    * { box-sizing:border-box } body { margin:0; min-height:100vh; background:radial-gradient(circle at 85% 0,#1d3957 0,transparent 35%),var(--bg); color:var(--text); font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-    .shell { max-width:1240px; margin:auto; padding:34px 22px 60px } header { display:flex; justify-content:space-between; align-items:center; gap:20px; margin-bottom:34px; }
-    .brand { display:flex; align-items:center; gap:13px } .mark { width:42px; height:42px; display:grid; place-items:center; border-radius:13px; color:#06221d; background:var(--accent); font-weight:900; box-shadow:0 0 30px #62e6c544; } h1,h2,p { margin:0 } h1 { font-size:25px; letter-spacing:-.03em } .eyebrow { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.16em; }
-    .status { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:13px } .dot { width:9px;height:9px;border-radius:50%;background:#76849a } .dot.live { background:var(--accent); box-shadow:0 0 12px var(--accent) }
-    .grid { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(340px,.9fr); gap:20px } .panel { background:#111d31dd; border:1px solid var(--line); border-radius:18px; padding:24px; box-shadow:0 18px 60px #0003; } .wide { grid-column:1/-1 }
-    h2 { font-size:17px; margin-bottom:4px } .sub { color:var(--muted); margin-bottom:22px; font-size:13px } label { display:block; color:#b7c7df; font-size:12px; margin:15px 0 7px } input,select,textarea { width:100%; border:1px solid var(--line); border-radius:9px; padding:11px 12px; background:#0b1628; color:var(--text); outline:none; font:inherit } textarea { min-height:78px; resize:vertical } input:focus,select:focus,textarea:focus { border-color:var(--blue); box-shadow:0 0 0 3px #78a9ff1c }
-    .row { display:grid; grid-template-columns:1fr 1fr; gap:13px } .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:22px } button { border:0; border-radius:9px; padding:11px 16px; color:#061c1a; background:var(--accent); cursor:pointer; font-weight:700 } button.secondary { color:var(--text); background:#20304b; border:1px solid #344967 } button:disabled { cursor:wait; opacity:.55 }
-    .repo { display:flex; gap:9px; align-items:center; padding:13px; border:1px solid #2e496e; background:#0d1b30; border-radius:11px; margin-bottom:17px } .repo-icon { color:var(--blue); font-size:22px } .repo strong { display:block } .repo span { color:var(--muted); font-size:12px; word-break:break-all }
-    .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin:18px 0 22px } .metric { background:#0d192c; border:1px solid var(--line); border-radius:11px; padding:14px } .metric b { display:block; font-size:26px; color:var(--accent) } .metric span { color:var(--muted); font-size:12px }
-    .timeline { border-left:1px solid #38516f; margin:8px 0 0 7px; padding-left:19px } .event { position:relative; padding:0 0 19px } .event:before { content:""; position:absolute; width:8px;height:8px;border-radius:50%;background:var(--blue); left:-24px;top:7px } .event b { font-size:13px } .event small { display:block;color:var(--muted); margin-top:3px } .empty { color:var(--muted); padding:20px 0 }
-    .banner { display:none; padding:11px 13px; border-radius:9px; margin-top:15px; background:#16324a; color:#bfe1ff; font-size:13px } .banner.show { display:block } .banner.error { background:#421e30; color:#ffb4c0 } code { color:var(--accent) }
-    @media(max-width:800px) { .grid { grid-template-columns:1fr } .wide { grid-column:auto } header { align-items:flex-start; flex-direction:column } }
+    :root {
+      color-scheme: light;
+      --background: #FFFFFF;
+      --canvas: #F7F7F8;
+      --foreground: #22222A;
+      --muted: #696A73;
+      --subtle: #8A8B93;
+      --primary: #2744A5;
+      --primary-strong: #1F378B;
+      --primary-soft: #EEF1FF;
+      --primary-border: #C9D2F7;
+      --secondary: #F4F4F5;
+      --border: #E4E4E7;
+      --border-strong: #D3D3D8;
+      --success: #21C45D;
+      --success-soft: #EAF9EF;
+      --success-border: #BEEBCB;
+      --success-text: #17783B;
+      --warning: #FFA71A;
+      --warning-soft: #FFF4DE;
+      --destructive: #EF4343;
+      --destructive-soft: #FDECEC;
+      --destructive-border: #F4BABA;
+      --destructive-text: #A62828;
+      --info: #3B82F6;
+      --info-soft: #EAF2FF;
+      --info-border: #BDD2FA;
+      --info-text: #2257A8;
+      --task-text: #176EC7;
+      --shadow: rgba(34, 34, 42, .06);
+      --focus: rgba(39, 68, 165, .22);
+      --radius: 8px;
+    }
+    * { box-sizing: border-box; }
+    html { min-width: 320px; }
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      background: var(--canvas);
+      color: var(--foreground);
+      font: 14px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, select, textarea { font: inherit; }
+    button { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, [role="option"]:focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 1px;
+    }
+    .shell { width: min(1440px, 100%); margin: 0 auto; padding: 32px 32px 56px; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding-bottom: 25px;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .mark {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      color: var(--background);
+      background: var(--primary);
+      border-radius: 8px;
+    }
+    .mark svg { width: 21px; height: 21px; }
+    .brand-copy { min-width: 0; }
+    .eyebrow {
+      margin: 0;
+      color: var(--subtle);
+      font-size: 10px;
+      line-height: 1.2;
+      font-weight: 700;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+    h1, h2, p { margin: 0; }
+    h1 {
+      margin-top: 3px;
+      overflow: hidden;
+      color: var(--foreground);
+      font-size: 20px;
+      line-height: 1.2;
+      font-weight: 720;
+      letter-spacing: -.025em;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .topbar-meta { display: flex; align-items: center; gap: 18px; }
+    .env {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 5px 9px;
+      background: var(--background);
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .status-badge .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--subtle);
+    }
+    .status-badge.live { color: var(--success-text); border-color: var(--success-border); background: var(--success-soft); }
+    .status-badge.live .dot { background: var(--success); }
+    .page-header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 30px 0 24px;
+    }
+    .page-header h2 { font-size: 23px; line-height: 1.2; letter-spacing: -.03em; }
+    .page-context {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+    }
+    .page-context svg { color: var(--primary); }
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1.04fr) minmax(340px, .96fr);
+      gap: 24px;
+      align-items: start;
+    }
+    .panel {
+      min-width: 0;
+      padding: 24px;
+      background: var(--background);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 2px 7px var(--shadow);
+    }
+    .wide { grid-column: 1 / -1; }
+    .panel-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding-bottom: 19px;
+      border-bottom: 1px solid var(--border);
+    }
+    .panel-head h2 { color: var(--foreground); font-size: 16px; line-height: 1.3; }
+    .step {
+      display: inline-grid;
+      place-items: center;
+      width: 25px;
+      height: 25px;
+      flex: 0 0 auto;
+      border: 1px solid var(--primary-border);
+      border-radius: 50%;
+      background: var(--primary-soft);
+      color: var(--primary);
+      font-size: 11px;
+      font-weight: 750;
+    }
+    .repo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+      margin: 20px 0 21px;
+      padding: 12px;
+      background: var(--secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .repo-icon {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      flex: 0 0 auto;
+      border-radius: 6px;
+      background: var(--primary-soft);
+      color: var(--primary);
+    }
+    .repo-icon svg { width: 17px; height: 17px; }
+    .repo-copy { min-width: 0; }
+    .repo strong { display: block; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .repo span { display: block; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .field { min-width: 0; }
+    label {
+      display: flex;
+      align-items: baseline;
+      gap: 5px;
+      margin: 15px 0 6px;
+      color: var(--foreground);
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .field-grid label { margin-top: 15px; }
+    .label-note { color: var(--subtle); font-size: 10px; font-weight: 500; }
+    input, textarea {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 9px 11px;
+      background: var(--background);
+      color: var(--foreground);
+      outline: none;
+      transition: border-color .16s ease, box-shadow .16s ease;
+    }
+    input { min-height: 38px; }
+    textarea { min-height: 82px; resize: vertical; }
+    input::placeholder, textarea::placeholder { color: var(--subtle); }
+    input:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--focus); }
+    .technical { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    .custom-select { position: relative; }
+    .select-source {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      border: 0;
+      opacity: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+    .select-trigger {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      min-height: 38px;
+      padding: 9px 11px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--background);
+      color: var(--foreground);
+      cursor: pointer;
+      text-align: left;
+    }
+    .select-trigger:hover { border-color: var(--border-strong); }
+    .select-trigger[aria-expanded="true"] { border-color: var(--primary); box-shadow: 0 0 0 3px var(--focus); }
+    .select-trigger svg { flex: 0 0 auto; color: var(--muted); transition: transform .16s ease; }
+    .select-trigger[aria-expanded="true"] svg { transform: rotate(180deg); }
+    .select-menu {
+      position: absolute;
+      z-index: 5;
+      top: calc(100% + 5px);
+      right: 0;
+      left: 0;
+      padding: 4px;
+      background: var(--background);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 8px 20px var(--shadow);
+    }
+    .select-menu[hidden] { display: none; }
+    .select-option {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      padding: 8px 9px;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--foreground);
+      cursor: pointer;
+      font-size: 13px;
+      text-align: left;
+    }
+    .select-option:hover, .select-option[aria-selected="true"] { background: var(--primary-soft); color: var(--primary); }
+    .select-option svg { opacity: 0; }
+    .select-option[aria-selected="true"] svg { opacity: 1; }
+    .mode-note {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .mode-note svg { color: var(--info); flex: 0 0 auto; }
+    .actions {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 21px;
+    }
+    button.action {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 38px;
+      padding: 9px 14px;
+      border: 1px solid var(--primary);
+      border-radius: var(--radius);
+      background: var(--primary);
+      color: var(--background);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      transition: background .16s ease, border-color .16s ease, transform .16s ease;
+    }
+    button.action:hover { background: var(--primary-strong); border-color: var(--primary-strong); }
+    button.action:active { transform: translateY(1px); }
+    button.action.secondary { border-color: var(--border-strong); background: var(--background); color: var(--foreground); }
+    button.action.secondary:hover { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); }
+    button.action:disabled { cursor: wait; opacity: .58; transform: none; }
+    button.action svg { width: 15px; height: 15px; }
+    .banner {
+      display: none;
+      width: 100%;
+      margin-top: 14px;
+      padding: 10px 12px;
+      border: 1px solid var(--info-border);
+      border-radius: var(--radius);
+      background: var(--info-soft);
+      color: var(--info-text);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .banner.show { display: block; }
+    .banner.error { border-color: var(--destructive-border); background: var(--destructive-soft); color: var(--destructive-text); }
+    .monitor-head { align-items: center; }
+    .monitor-actions { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .live-label { display: inline-flex; align-items: center; gap: 6px; color: var(--success-text); }
+    .live-label .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin: 20px 0 24px;
+    }
+    .metric {
+      min-width: 0;
+      padding: 14px 15px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--canvas);
+    }
+    .metric b { display: block; color: var(--foreground); font-size: 24px; line-height: 1.05; font-weight: 720; letter-spacing: -.025em; }
+    .metric span { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; }
+    .metric:first-child b { color: var(--primary); }
+    .metric:nth-child(2) b { color: var(--task-text); }
+    .metric:nth-child(3) b { color: var(--success-text); }
+    .timeline-wrap { min-width: 0; }
+    .timeline-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: .02em;
+      text-transform: uppercase;
+    }
+    .timeline {
+      min-height: 104px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 15px 18px 2px 27px;
+      background: var(--canvas);
+    }
+    .event {
+      position: relative;
+      padding: 0 0 15px;
+      overflow-wrap: anywhere;
+    }
+    .event:before {
+      content: "";
+      position: absolute;
+      width: 7px;
+      height: 7px;
+      left: -18px;
+      top: 7px;
+      border-radius: 50%;
+      background: var(--info);
+      box-shadow: 0 0 0 3px var(--info-soft);
+    }
+    .event:not(:last-child):after {
+      content: "";
+      position: absolute;
+      width: 1px;
+      top: 15px;
+      bottom: 0;
+      left: -15px;
+      background: var(--border-strong);
+    }
+    .event b { display: block; color: var(--foreground); font-size: 12px; line-height: 1.35; }
+    .event small { display: block; margin-top: 3px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.4; }
+    .empty { color: var(--subtle); padding: 21px 0; font-size: 12px; }
+    .footer-note {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-top: 17px;
+      color: var(--subtle);
+      font-size: 11px;
+    }
+    .footer-note code { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    @media (max-width: 860px) {
+      .shell { padding: 24px 20px 42px; }
+      .workspace { grid-template-columns: 1fr; }
+      .wide { grid-column: auto; }
+    }
+    @media (max-width: 560px) {
+      .shell { padding: 20px 14px 34px; }
+      .topbar { align-items: flex-start; flex-direction: column; gap: 13px; padding-bottom: 18px; }
+      .topbar-meta { width: 100%; justify-content: space-between; }
+      .page-header { align-items: flex-start; flex-direction: column; gap: 9px; padding: 23px 0 18px; }
+      .page-context { text-align: left; }
+      .panel { padding: 18px 16px; }
+      .field-grid, .metrics { grid-template-columns: 1fr; gap: 0; }
+      .metrics { gap: 9px; }
+      .metric { padding: 12px 13px; }
+      .actions { align-items: stretch; flex-direction: column; }
+      button.action { width: 100%; }
+      .monitor-head { align-items: flex-start; flex-direction: column; }
+    }
   </style>
 </head>
 <body>
   <main class="shell">
-    <header><div class="brand"><div class="mark">↻</div><div><div class="eyebrow">Loop Engineering</div><h1>looptask control center</h1></div></div><div class="status"><i class="dot" id="healthDot" aria-hidden="true"></i><span id="healthText" aria-live="polite">正在连接服务…</span></div></header>
-    <div class="grid">
-      <section class="panel">
-        <h2>关联 GitHub 仓库</h2><p class="sub">配置项目来源，然后定义一个可重复执行的维护 loop。</p>
-        <div class="repo"><div class="repo-icon">◈</div><div><strong id="repoName">尚未关联仓库</strong><span id="repoUrl">输入仓库地址后开始</span></div></div>
-        <label for="repository">GitHub repository URL</label><input id="repository" placeholder="https://github.com/owner/repository">
-        <div class="row"><div><label for="project">项目名称</label><input id="project" value="looptask"></div><div><label for="branch">默认分支</label><input id="branch" value="main"></div></div>
-        <label for="docs">文档路径 <span class="eyebrow">(逗号分隔)</span></label><input id="docs" value="README.md">
-        <label for="source">源码路径 <span class="eyebrow">(逗号分隔)</span></label><input id="source" value="src,tests">
-        <label for="stack">技术栈 <span class="eyebrow">(逗号分隔)</span></label><input id="stack" value="rust">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 7.5A7.5 7.5 0 1 1 4 15"/>
+            <path d="M5 3.5v4h4"/>
+            <path d="M12 8v4l2.8 1.7"/>
+          </svg>
+        </div>
+        <div class="brand-copy">
+          <p class="eyebrow">Loop Engineering</p>
+          <h1>looptask control center</h1>
+        </div>
+      </div>
+      <div class="topbar-meta">
+        <span class="env"><span>RUST / AXUM</span><span aria-hidden="true">·</span><span>ADMIN</span></span>
+        <span class="status-badge" id="serviceBadge"><i class="dot" id="healthDot" aria-hidden="true"></i><span id="healthText" aria-live="polite">正在连接服务…</span></span>
+      </div>
+    </header>
+
+    <section class="page-header" aria-labelledby="pageTitle">
+      <div>
+        <p class="eyebrow">Operations / Manual run</p>
+        <h2 id="pageTitle">Loop workspace</h2>
+      </div>
+      <div class="page-context" aria-label="当前运行模式">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 3v18M3 12h18"/>
+        </svg>
+        <span>手动触发 · 安全执行边界已启用</span>
+      </div>
+    </section>
+
+    <div class="workspace">
+      <section class="panel" aria-labelledby="repositoryTitle">
+        <div class="panel-head">
+          <div>
+            <h2 id="repositoryTitle">关联 GitHub 仓库</h2>
+          </div>
+          <span class="step" aria-label="步骤 1">01</span>
+        </div>
+        <div class="repo">
+          <div class="repo-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 5.5h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2Z"/>
+              <path d="M9 3.5v4M15 3.5v4M9 14h.01M12 14h.01M15 14h.01M9 17h.01M12 17h.01M15 17h.01"/>
+            </svg>
+          </div>
+          <div class="repo-copy">
+            <strong id="repoName">尚未关联仓库</strong>
+            <span id="repoUrl">输入仓库地址后开始</span>
+          </div>
+        </div>
+
+        <label for="repository">GitHub repository URL</label>
+        <input id="repository" type="url" placeholder="https://github.com/owner/repository" autocomplete="url">
+
+        <div class="field-grid">
+          <div class="field">
+            <label for="project">项目名称</label>
+            <input id="project" value="looptask" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="branch">默认分支</label>
+            <input id="branch" value="main" class="technical" autocomplete="off">
+          </div>
+        </div>
+        <label for="docs">文档路径 <span class="label-note">(逗号分隔)</span></label>
+        <input id="docs" value="README.md" class="technical">
+        <label for="source">源码路径 <span class="label-note">(逗号分隔)</span></label>
+        <input id="source" value="src,tests" class="technical">
+        <label for="stack">技术栈 <span class="label-note">(逗号分隔)</span></label>
+        <input id="stack" value="rust" class="technical">
       </section>
-      <section class="panel">
-        <h2>制定 Loop Task</h2><p class="sub">选择目标、权限模式和运行策略。</p>
-        <label for="loop">任务名称</label><input id="loop" value="docs-sync" placeholder="例如 docs-sync">
-        <div class="row"><div><label for="kind">任务类型</label><select id="kind"><option value="docs_sync">Documentation sync</option><option value="external_data_sync">External data sync</option><option value="architecture_scan">Architecture scan</option></select></div><div><label for="mode">安全模式</label><select id="mode"><option value="report-only">report-only</option><option value="safe-pr" selected>safe-pr</option><option value="human-gated">human-gated</option></select></div></div>
-        <label for="goal">目标描述</label><textarea id="goal">Keep project documentation aligned with source changes.</textarea>
-        <div class="row"><div><label for="agent">Agent key</label><input id="agent" value="default"></div><div><label for="celld">celld URL</label><input id="celld" value="http://127.0.0.1:9876"></div></div>
-        <div class="actions"><button id="plan">预览执行计划</button><button class="secondary" id="dispatch">立即派发任务</button></div><div class="banner" id="message"></div>
+
+      <section class="panel" aria-labelledby="taskTitle">
+        <div class="panel-head">
+          <div>
+            <h2 id="taskTitle">制定 Loop Task</h2>
+          </div>
+          <span class="step" aria-label="步骤 2">02</span>
+        </div>
+
+        <label for="loop">任务名称</label>
+        <input id="loop" value="docs-sync" placeholder="例如 docs-sync" autocomplete="off">
+        <div class="field-grid">
+          <div class="field">
+            <label for="kind-trigger">任务类型</label>
+            <div class="custom-select" data-select="kind">
+              <div id="kind" class="select-source" data-value="docs_sync" aria-hidden="true"></div>
+              <button type="button" class="select-trigger" id="kind-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="kind-options">
+                <span class="select-value">Documentation sync</span>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div class="select-menu" id="kind-options" role="listbox" tabindex="-1" hidden>
+                <button type="button" class="select-option" role="option" data-value="docs_sync" aria-selected="true">Documentation sync<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></button>
+                <button type="button" class="select-option" role="option" data-value="external_data_sync" aria-selected="false">External data sync<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></button>
+                <button type="button" class="select-option" role="option" data-value="architecture_scan" aria-selected="false">Architecture scan<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></button>
+              </div>
+            </div>
+          </div>
+          <div class="field">
+            <label for="mode-trigger">安全模式</label>
+            <div class="custom-select" data-select="mode">
+              <div id="mode" class="select-source" data-value="safe-pr" aria-hidden="true"></div>
+              <button type="button" class="select-trigger" id="mode-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="mode-options">
+                <span class="select-value">safe-pr</span>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div class="select-menu" id="mode-options" role="listbox" tabindex="-1" hidden>
+                <button type="button" class="select-option" role="option" data-value="report-only" aria-selected="false">report-only<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></button>
+                <button type="button" class="select-option" role="option" data-value="safe-pr" aria-selected="true">safe-pr<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></button>
+                <button type="button" class="select-option" role="option" data-value="human-gated" aria-selected="false">human-gated<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <label for="goal">目标描述</label>
+        <textarea id="goal">Keep project documentation aligned with source changes.</textarea>
+        <div class="field-grid">
+          <div class="field">
+            <label for="agent">Agent key</label>
+            <input id="agent" value="default" class="technical" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="celld">celld URL</label>
+            <input id="celld" value="http://127.0.0.1:9876" class="technical" autocomplete="url">
+          </div>
+        </div>
+        <div class="mode-note">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+          <span id="modeNote">safe-pr 只允许通过受控变更路径提交建议。</span>
+        </div>
+        <div class="actions">
+          <button type="button" class="action" id="plan">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h10l4 4v11H5z"/><path d="M15 4.5v4h4M8 13h8M8 16h5"/></svg>
+            <span>预览执行计划</span>
+          </button>
+          <button type="button" class="action secondary" id="dispatch">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21 3-7.5 18-3.2-7.3L3 10.5 21 3Z"/><path d="M10.3 13.7 15 9"/></svg>
+            <span>立即派发任务</span>
+          </button>
+        </div>
+        <div class="banner" id="message" role="status" aria-live="polite"></div>
       </section>
-      <section class="panel wide">
-        <h2>过程监控</h2><p class="sub">实时查看 Agent cell 的 inbox、任务和 artifact 状态。</p>
-        <div class="metrics"><div class="metric"><b id="inbox">—</b><span>Inbox events</span></div><div class="metric"><b id="tasks">—</b><span>Tasks</span></div><div class="metric"><b id="artifacts">—</b><span>Artifacts</span></div></div>
-        <div class="timeline" id="timeline"><div class="empty">派发任务后，这里会显示运行事件。</div></div>
+
+      <section class="panel wide" aria-labelledby="monitorTitle">
+        <div class="panel-head monitor-head">
+          <div>
+            <h2 id="monitorTitle">过程监控</h2>
+          </div>
+          <div class="monitor-actions"><span class="live-label"><i class="dot" aria-hidden="true"></i>Polling every 5s</span></div>
+        </div>
+        <div class="metrics" aria-label="Agent cell metrics">
+          <div class="metric"><b id="inbox">—</b><span>Inbox events</span></div>
+          <div class="metric"><b id="tasks">—</b><span>Tasks</span></div>
+          <div class="metric"><b id="artifacts">—</b><span>Artifacts</span></div>
+        </div>
+        <div class="timeline-wrap">
+          <div class="timeline-label"><span>Run activity</span><span>Latest first</span></div>
+          <div class="timeline" id="timeline"><div class="empty">派发任务后，这里会显示运行事件。</div></div>
+        </div>
+        <div class="footer-note"><span>Agent cell identity</span><code id="agentIdentity">project / loop / agent</code></div>
       </section>
     </div>
   </main>
   <script>
     const $=id=>document.getElementById(id), DEFAULTS={durableObjectClass:"AgentCell",artifactBucketPrefix:"agents",hotMessageLimit:50,maxSteps:12,maxConsecutiveFailures:3,largeFileLines:500}, say=(text,error=false)=>{const e=$("message");e.textContent=text;e.className="banner show"+(error?" error":"")};
     const list=id=>$(id).value.split(",").map(x=>x.trim()).filter(Boolean);
-    function project(){return {name:$("project").value,repository:$("repository").value,defaultBranch:$("branch").value,techStack:list("stack"),docs:list("docs"),sourcePaths:list("source"),celld:{appDir:"celld",bucket:null,publicUrl:$("celld").value,internalUrl:null,durableObjectClass:DEFAULTS.durableObjectClass,artifactBucketPrefix:DEFAULTS.artifactBucketPrefix},loops:[{name:$("loop").value,kind:$("kind").value,goal:$("goal").value,mode:$("mode").value,trigger:{type:"manual"},agent:{cellIdTemplate:"{project}/{loop}/{agent}",sandboxRequired:false,allowedTools:["read-repo"],humanGate:$("mode").value==="human-gated"},verifiers:[],state:{hotSqliteScope:"agent-cell",artifactUriPrefix:"r2://agents/{agent}/artifacts/",hotMessageLimit:DEFAULTS.hotMessageLimit},stopRules:{maxSteps:DEFAULTS.maxSteps,maxConsecutiveFailures:DEFAULTS.maxConsecutiveFailures,largeFileLines:DEFAULTS.largeFileLines},escalationRules:[]}]};}
+     const valueOf=id=>$(id).dataset.value;
+     function project(){const mode=valueOf("mode");return {name:$("project").value,repository:$("repository").value,defaultBranch:$("branch").value,techStack:list("stack"),docs:list("docs"),sourcePaths:list("source"),celld:{appDir:"celld",bucket:null,publicUrl:$("celld").value,internalUrl:null,durableObjectClass:DEFAULTS.durableObjectClass,artifactBucketPrefix:DEFAULTS.artifactBucketPrefix},loops:[{name:$("loop").value,kind:valueOf("kind"),goal:$("goal").value,mode,trigger:{type:"manual"},agent:{cellIdTemplate:"{project}/{loop}/{agent}",sandboxRequired:false,allowedTools:["read-repo"],humanGate:mode==="human-gated"},verifiers:[],state:{hotSqliteScope:"agent-cell",artifactUriPrefix:"r2://agents/{agent}/artifacts/",hotMessageLimit:DEFAULTS.hotMessageLimit},stopRules:{maxSteps:DEFAULTS.maxSteps,maxConsecutiveFailures:DEFAULTS.maxConsecutiveFailures,largeFileLines:DEFAULTS.largeFileLines},escalationRules:[]}]};}
     function request(){return {project:project(),loopName:$("loop").value,agentKey:$("agent").value||"default"}}
+    function updateIdentity(){const p=project();$("agentIdentity").textContent=`${p.name} / ${$("loop").value} / ${$("agent").value||"default"}`;}
     function card(title,detail){const e=document.createElement("div"),b=document.createElement("b"),s=document.createElement("small");e.className="event";b.textContent=title;s.textContent=detail;e.append(b,s);$("timeline").prepend(e)}
     async function call(path,payload){const r=await fetch(path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)}),text=await r.text();if(!r.ok)throw Error(text||"请求失败");try{return JSON.parse(text)}catch(_){throw Error("服务返回了无效响应")}}
     async function plan(){ $("plan").disabled=true; try{const payload=request(),data=await call("/api/v1/loops/plan",payload); if(!data.accepted)throw Error(data.reason); if(!data.loopPlan?.agentCellId)throw Error("计划缺少 Agent cell 信息"); $("repoName").textContent=payload.project.name;$("repoUrl").textContent=payload.project.repository;card("计划已生成",`Agent cell: ${data.loopPlan.agentCellId}`);say("计划已生成，可以确认后派发。")}catch(e){say(e.message,true)}finally{$("plan").disabled=false}}
     let monitorTimer, pollFailures=0;
     async function dispatch(){ $("dispatch").disabled=true; try{const payload=request(),data=await call("/api/v1/loops/dispatch",payload); if(!data.accepted)throw Error(data.reason); if(!data.dispatch?.id||!data.loopPlan?.agentCellId)throw Error("派发响应缺少运行信息"); $("repoName").textContent=payload.project.name;$("repoUrl").textContent=payload.project.repository;card("任务已派发",`事件 ${data.dispatch.id} 已写入 ${data.loopPlan.agentCellId}`);say("任务已派发，正在监控 Agent cell。");clearInterval(monitorTimer);monitorTimer=setInterval(poll,5000);poll()}catch(e){say("派发失败："+e.message,true)}finally{$("dispatch").disabled=false}}
-    async function poll(){try{const p=project(),id=`${p.name}/${$("loop").value}/${$("agent").value||"default"}`,r=await fetch("/api/v1/celld/agents/state",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({project:p,agentCellId:id})});if(!r.ok)throw Error("状态服务返回错误");const d=await r.json();pollFailures=0;$("inbox").textContent=d.inbox;$("tasks").textContent=d.tasks;$("artifacts").textContent=d.artifacts;$("healthDot").className="dot live";$("healthText").textContent="服务在线 · 状态已同步"}catch(_){pollFailures++;$("healthDot").className="dot";$("healthText").textContent="状态服务离线";if(pollFailures>=3)clearInterval(monitorTimer)}}
-    $("repository").addEventListener("input",e=>{$("repoUrl").textContent=e.target.value;$("repoName").textContent=e.target.value.split("/").pop()||"尚未关联仓库"});$("plan").onclick=plan;$("dispatch").onclick=dispatch;fetch("/health").then(r=>{if(r.ok){$("healthDot").className="dot live";$("healthText").textContent="服务在线"}}).catch(()=>{$("healthText").textContent="服务不可用"});
+    async function poll(){try{const p=project(),id=`${p.name}/${$("loop").value}/${$("agent").value||"default"}`,r=await fetch("/api/v1/celld/agents/state",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({project:p,agentCellId:id})});if(!r.ok)throw Error("状态服务返回错误");const d=await r.json();pollFailures=0;$("inbox").textContent=d.inbox;$("tasks").textContent=d.tasks;$("artifacts").textContent=d.artifacts;$("healthDot").className="dot live";$("healthText").textContent="服务在线 · 状态已同步";$("serviceBadge").className="status-badge live"}catch(_){pollFailures++;$("healthDot").className="dot";$("healthText").textContent="状态服务离线";$("serviceBadge").className="status-badge";if(pollFailures>=3)clearInterval(monitorTimer)}}
+    function initCustomSelect(id){
+      const select=$(id),root=document.querySelector(`[data-select="${id}"]`),trigger=root.querySelector(".select-trigger"),menu=root.querySelector(".select-menu"),value=root.querySelector(".select-value"),options=[...root.querySelectorAll(".select-option")];
+      const close=()=>{menu.hidden=true;trigger.setAttribute("aria-expanded","false")};
+       const choose=option=>{select.dataset.value=option.dataset.value;value.textContent=option.textContent.trim();options.forEach(item=>item.setAttribute("aria-selected",item===option?"true":"false"));select.dispatchEvent(new Event("change",{bubbles:true}));close();trigger.focus();};
+      trigger.addEventListener("click",()=>{const open=trigger.getAttribute("aria-expanded")==="true";if(open){close()}else{menu.hidden=false;trigger.setAttribute("aria-expanded","true")}});
+      trigger.addEventListener("keydown",event=>{if(event.key==="ArrowDown"||event.key==="Enter"||event.key===" "){event.preventDefault();menu.hidden=false;trigger.setAttribute("aria-expanded","true");options[0].focus()}});
+      options.forEach((option,index)=>{option.addEventListener("click",()=>choose(option));option.addEventListener("keydown",event=>{if(event.key==="ArrowDown"){event.preventDefault();options[(index+1)%options.length].focus()}if(event.key==="ArrowUp"){event.preventDefault();options[(index-1+options.length)%options.length].focus()}if(event.key==="Escape"){close();trigger.focus()}if(event.key==="Enter"||event.key===" "){event.preventDefault();choose(option)}})});
+      document.addEventListener("click",event=>{if(!root.contains(event.target))close()});
+    }
+     const MODE_NOTES={"report-only":"report-only 仅分析并报告，不会提交变更。","safe-pr":"safe-pr 只允许通过受控变更路径提交建议。","human-gated":"human-gated 在代码或架构变更前需要人工批准。"};
+     function updateModeNote(){$("modeNote").textContent=MODE_NOTES[valueOf("mode")]||"";}
+     $("repository").addEventListener("input",e=>{$("repoUrl").textContent=e.target.value;$("repoName").textContent=e.target.value.split("/").pop()||"尚未关联仓库"});$("plan").onclick=plan;$("dispatch").onclick=dispatch;["project","loop","agent"].forEach(id=>$(id).addEventListener("input",updateIdentity));initCustomSelect("kind");initCustomSelect("mode");$("mode").addEventListener("change",updateModeNote);updateModeNote();updateIdentity();fetch("/health").then(r=>{if(r.ok){$("healthDot").className="dot live";$("healthText").textContent="服务在线";$("serviceBadge").className="status-badge live"}}).catch(()=>{$("healthText").textContent="服务不可用"});
   </script>
 </body>
 </html>
