@@ -1,0 +1,108 @@
+{
+  "project": {
+    "name": "looptask",
+    "repository": "https://github.com/EeroEternal/looptask",
+    "defaultBranch": "main",
+    "techStack": ["rust", "axum", "tokio", "celld", "durable-objects"],
+    "docs": ["README.md"],
+    "sourcePaths": ["src", "tests", "celld/src"],
+    "celld": {
+      "appDir": "celld",
+      "bucket": null,
+      "publicUrl": "http://127.0.0.1:9876",
+      "internalUrl": null,
+      "durableObjectClass": "AgentCell",
+      "artifactBucketPrefix": "agents"
+    },
+    "externalDataSources": [
+      {
+        "name": "example-registry",
+        "url": "https://example.com/registry.json",
+        "cachePath": "data/example-registry.json",
+        "schemaPath": "schemas/example-registry.schema.json"
+      }
+    ],
+    "loops": [
+      {
+        "name": "docs-sync",
+        "kind": "docs_sync",
+        "goal": "Keep README and project documentation aligned with source changes.",
+        "mode": "safe-pr",
+        "trigger": {
+          "type": "cron",
+          "schedule": "0 9 * * 1"
+        },
+        "agent": {
+          "cellIdTemplate": "{project}/{loop}/{agent}",
+          "sandboxRequired": false,
+          "allowedTools": ["read-repo", "write-docs"],
+          "humanGate": false
+        },
+        "verifiers": [
+          {
+            "name": "rust-tests",
+            "command": ["cargo", "test", "--workspace"],
+            "timeoutSeconds": 120
+          }
+        ],
+        "state": {
+          "hotSqliteScope": "agent-cell",
+          "artifactUriPrefix": "r2://agents/{agent}/artifacts/",
+          "hotMessageLimit": 50
+        },
+        "stopRules": {
+          "maxSteps": 8,
+          "maxConsecutiveFailures": 3,
+          "largeFileLines": 500
+        },
+        "escalationRules": [
+          "Escalate when documentation changes require product or architecture decisions."
+        ]
+      },
+      {
+        "name": "external-data-sync",
+        "kind": "external_data_sync",
+        "goal": "Check configured external data sources before generated cache updates.",
+        "mode": "safe-pr",
+        "trigger": {
+          "type": "manual"
+        },
+        "agent": {
+          "cellIdTemplate": "{project}/{loop}/{agent}",
+          "sandboxRequired": true,
+          "allowedTools": ["fetch", "schema-validate", "write-cache"],
+          "humanGate": false
+        },
+        "verifiers": [],
+        "escalationRules": [
+          "Escalate when schema validation is missing or fetched data is empty."
+        ]
+      },
+      {
+        "name": "architecture-scan",
+        "kind": "architecture_scan",
+        "goal": "Find coupling hotspots and suggest decoupling work without automatic refactors.",
+        "mode": "report-only",
+        "trigger": {
+          "type": "cron",
+          "schedule": "0 9 1 * *"
+        },
+        "agent": {
+          "cellIdTemplate": "{project}/{loop}/{agent}",
+          "sandboxRequired": true,
+          "allowedTools": ["read-repo", "static-analysis"],
+          "humanGate": true
+        },
+        "verifiers": [],
+        "stopRules": {
+          "maxSteps": 12,
+          "maxConsecutiveFailures": 2,
+          "largeFileLines": 500
+        },
+        "escalationRules": [
+          "Escalate before changing module boundaries or public APIs."
+        ]
+      }
+    ]
+  }
+}
