@@ -1,10 +1,10 @@
-# Admin UI Design Specification
+# Product UI Design Specification
 
 `docs/design.md` is the **only UI design entry**. Chapter details live under [`docs/design/`](design/). Do **not** load every chapter by default — use skill [`admin-ui-change`](../.agents/skills/admin-ui-change/SKILL.md).
 
 ## Overview
 
-Admin UI is a dense operational console, not a marketing site. The interface should feel controlled, technical, and calm: white and near-neutral surfaces, one clearly recognizable primary accent, and explicit semantic state colors for success, warning, and destructive paths.
+The product UI is a focused operational console, not a marketing site. Every frontend surface should feel controlled, technical, and calm: white and near-neutral surfaces, one clearly recognizable primary accent, and explicit semantic state colors for success, warning, and destructive paths.
 
 The visual baseline is unified across pages. Every page should read as part of the same system by reusing the same semantic tokens, shared layout shell, card treatment, and dialog structure. When a case is not covered by a literal token, prefer consistency with the existing admin UI guidance over introducing a new visual dialect.
 
@@ -58,8 +58,7 @@ Always load this file (Overview + Hard rules + PR checklist below). Then open **
 
 ## Scope
 
-Applies to `admin/src/pages/*`, `admin/src/components/*`, and `admin/src/components/ui/*`.
-Third-party internals and code-highlight themes are out of scope for wrapper-controlled styling only.
+Applies to all user-facing frontend surfaces in this repository, including `admin/src/pages/*`, `admin/src/components/*`, `admin/src/components/ui/*`, `static/*.html`, and frontend assets or components added elsewhere. The implementation technology may differ, but the layout, hierarchy, accessibility, responsive, and visual rules apply consistently. Third-party internals and code-highlight themes are out of scope for wrapper-controlled styling only.
 
 ## Hard rules
 

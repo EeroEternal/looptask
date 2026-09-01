@@ -44,5 +44,6 @@ Rules:
 - Avoid conditional blocks that change overall dialog height on first interaction after open when those details are part of the primary path. Prefer placeholder height over `null` until the user chooses.
 - Scroll containers (`overflow-y-auto` dialog bodies) must not jump scroll position when content height changes within the reserved slots.
 - Validation errors may appear below actions, but should not push critical controls out of view without a reserved error strip when errors are common on that step.
+- Authentication pages with adjacent story and form cards must reserve a shared desktop height across register, login, verification, and error states so the cards keep aligned top and bottom edges. On narrow screens, the cards may return to content-driven height.
 
 Canonical references: `ApiKeyUsageExamples` (fixed-height tab switching for curl commands), `ApiKeyCreateWizard` route meta slot (`SelectedRouteMeta` with `min-h`), `RouteCreateWizard` strategy extras `min-h` region.
