@@ -1,0 +1,1 @@
+- [Pages custom-domain verification](pages-custom-domain-verification.md) — a custom domain can report active before serving the newest deployment; verify live headers and asset markers too.
