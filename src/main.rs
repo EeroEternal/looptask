@@ -1,5 +1,6 @@
 use looptask::{Config, server};
 use sqlx::{PgPool, postgres::PgPoolOptions};
+use std::env;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -23,10 +24,14 @@ async fn main() -> anyhow::Result<()> {
         .connect(&config.database_url)
         .await
         .map_err(|error| anyhow::anyhow!("failed to connect to PostgreSQL: {error}"))?;
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .map_err(|error| anyhow::anyhow!("failed to apply database migrations: {error}"))?;
+    if env::var("LOOPTASK_SKIP_MIGRATIONS").as_deref() == Ok("true") {
+        info!("skipping runtime database migrations in the published environment");
+    } else {
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .map_err(|error| anyhow::anyhow!("failed to apply database migrations: {error}"))?;
+    }
     let app = server::create_router_with_database(pool);
     let addr = format!("{}:{}", config.host, config.port);
 

@@ -127,6 +127,11 @@ Codes are stored only as HMACs, expire after 10 minutes, allow at most five
 attempts, and have a 60-second resend cooldown. Sessions store only a hash of
 the opaque cookie token, expire after 30 days, and can be revoked on logout.
 
+Development starts apply the checked-in SQLx migrations automatically. The
+published service skips runtime migration execution because Replit Publish
+synchronizes the production database schema separately; this avoids replaying
+development migration DDL against the production database.
+
 `/health`, `/api/v1/ping`, and the authentication endpoints are public. Loop
 template, planning, validation, dispatch, and celld proxy endpoints require a
 valid session cookie. The production binary fails to start when `DATABASE_URL`
