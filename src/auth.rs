@@ -649,8 +649,7 @@ impl EmailSender {
                 ));
             }
             return Err(Error::Config(format!(
-                "Cloudflare 邮件发送失败（{}）：{}",
-                status, error_message
+                "Cloudflare 邮件发送失败（{status}）：{error_message}"
             )));
         }
         let payload: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
