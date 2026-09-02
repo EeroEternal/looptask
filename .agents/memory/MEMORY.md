@@ -1,2 +1,3 @@
 - [Pages custom-domain verification](pages-custom-domain-verification.md) — a custom domain can report active before serving the newest deployment; verify live headers and asset markers too.
 - [Replit production SQLx migrations](replit-production-sqlx-migrations.md) — Publish syncs schema but not SQLx history; production must not replay migration DDL at startup.
+- [Mockup sandbox dependencies](mockup-sandbox-dependencies.md) — createArtifact scaffolds the sandbox but does not install its npm dependencies before the preview workflow starts.
