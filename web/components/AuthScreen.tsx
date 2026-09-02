@@ -23,10 +23,19 @@ export function AuthScreen({ onAuthenticated }: Props) {
   }, [cooldown]);
 
   function changeMode(nextMode: "register" | "login") {
+    const hadVerification = verification;
     setMode(nextMode);
     setVerification(false);
+    setCode("");
     setMessage("");
     setError(false);
+    if (hadVerification) {
+      setMessage(
+        nextMode === "register"
+          ? "已切换到注册流程。刚才的验证码仍可继续使用，必要时可以直接重新发送。"
+          : "已切换到登录流程。刚才的验证码仍可继续使用，必要时可以直接重新发送。",
+      );
+    }
   }
 
   async function requestCode(event?: FormEvent) {

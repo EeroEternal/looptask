@@ -151,6 +151,13 @@ struct DbChallenge {
 }
 
 #[derive(Debug, FromRow)]
+struct RecentChallenge {
+    id: Uuid,
+    purpose: String,
+    expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
 struct DbSessionUser {
     id: Uuid,
     email: String,
@@ -199,10 +206,11 @@ impl AuthState {
             ));
         }
 
-        let recent: Option<DateTime<Utc>> = sqlx::query_scalar(
-            "SELECT created_at
+        let recent = sqlx::query_as::<_, RecentChallenge>(
+            "SELECT id, purpose, expires_at
              FROM auth_challenges
              WHERE email = $1
+               AND consumed_at IS NULL
                AND created_at > NOW() - ($2 * INTERVAL '1 second')
              ORDER BY created_at DESC
              LIMIT 1",
@@ -211,8 +219,36 @@ impl AuthState {
         .bind(CODE_COOLDOWN_SECONDS)
         .fetch_optional(pool)
         .await?;
-        if recent.is_some() {
-            return Err(Error::Config("验证码发送过于频繁，请稍后再试".to_string()));
+        if let Some(recent) = recent {
+            if recent.purpose == purpose_name(request.purpose) {
+                return Err(Error::Config(
+                    "验证码已发送，请使用刚才收到的验证码；如需重新发送，请稍后再试".to_string(),
+                ));
+            }
+
+            sqlx::query(
+                "UPDATE auth_challenges
+                 SET purpose = $2, display_name = $3
+                 WHERE id = $1",
+            )
+            .bind(recent.id)
+            .bind(purpose_name(request.purpose))
+            .bind(&display_name)
+            .execute(pool)
+            .await?;
+
+            return Ok(CodeResponse {
+                accepted: true,
+                message: format!(
+                    "已切换到{}流程，请使用刚才收到的验证码",
+                    if matches!(request.purpose, AuthPurpose::Register) {
+                        "注册"
+                    } else {
+                        "登录"
+                    }
+                ),
+                expires_in_seconds: (recent.expires_at - Utc::now()).num_seconds().max(0),
+            });
         }
 
         let code = generate_code();
