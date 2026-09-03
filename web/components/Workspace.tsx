@@ -7,12 +7,29 @@ type AnyRecord = Record<string, any>;
 type Template = AnyRecord & { id: string; definition: AnyRecord };
 type Run = AnyRecord & { id: string; status: string };
 type User = { displayName?: string; email?: string };
+type TriggerMode = "manual" | "cron";
+type VerifierDraft = {
+  name: string;
+  command: string;
+  timeoutSeconds: number;
+};
 
 const DEFAULTS = {
   hotMessageLimit: 50,
   maxSteps: 12,
   maxConsecutiveFailures: 3,
   largeFileLines: 500,
+};
+
+const TRIGGER_COPY: Record<TriggerMode, { label: string; description: string }> = {
+  manual: {
+    label: "立即执行",
+    description: "由你确认后派发一次受控运行。",
+  },
+  cron: {
+    label: "定时执行",
+    description: "按 Cron 计划运行，并在每次派发前保留安全闸门。",
+  },
 };
 
 export function Workspace({
@@ -36,12 +53,20 @@ export function Workspace({
   const [loopName, setLoopName] = useState("docs-lifecycle-patrol");
   const [agentKey, setAgentKey] = useState("default");
   const [goal, setGoal] = useState("");
+  const [verifiers, setVerifiers] = useState<VerifierDraft[]>([]);
+  const [enabledVerifiers, setEnabledVerifiers] = useState<boolean[]>([]);
+  const [triggerMode, setTriggerMode] = useState<TriggerMode>("manual");
+  const [cronSchedule, setCronSchedule] = useState("0 9 * * 1-5");
   const [status, setStatus] = useState("待命");
   const [notice, setNotice] = useState("未开始运行");
   const [activeView, setActiveView] = useState("workspace");
+  const [activeStep, setActiveStep] = useState<1 | 2 | 3>(1);
   const [busy, setBusy] = useState("");
   const [toast, setToast] = useState("");
   const [error, setError] = useState(false);
+  const [projectImported, setProjectImported] = useState(false);
+  const [projectModalOpen, setProjectModalOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const definition = selected?.definition;
   const projectConfig = useMemo(() => buildProject(), [
@@ -56,6 +81,10 @@ export function Workspace({
     agentKey,
     goal,
     selected,
+    verifiers,
+    enabledVerifiers,
+    triggerMode,
+    cronSchedule,
   ]);
 
   useEffect(() => {
@@ -63,8 +92,8 @@ export function Workspace({
   }, []);
 
   function buildProject(): AnyRecord {
-    const loop = definition
-      ? { ...definition, name: loopName, goal: goal || definition.goal }
+    const baseLoop = definition
+      ? { ...definition }
       : {
           name: loopName,
           kind: "docs_sync",
@@ -100,6 +129,15 @@ export function Workspace({
             cleanupPolicy: "remove-worktree",
           },
         };
+    const activeVerifiers = verifiers
+      .filter((_, index) => enabledVerifiers[index] !== false)
+      .filter((verifier) => verifier.command.trim())
+      .map((verifier) => ({
+        name: verifier.name.trim() || "acceptance-check",
+        command: splitCommand(verifier.command),
+        timeoutSeconds: verifier.timeoutSeconds || 300,
+      }));
+
     return {
       name: project.trim(),
       repository: repository.trim() || null,
@@ -115,7 +153,18 @@ export function Workspace({
         durableObjectClass: "AgentCell",
         artifactBucketPrefix: "agents",
       },
-      loops: [loop],
+      loops: [
+        {
+          ...baseLoop,
+          name: loopName.trim() || "untitled-loop",
+          goal,
+          verifiers: activeVerifiers,
+          trigger:
+            triggerMode === "cron"
+              ? { type: "cron", schedule: cronSchedule.trim() || "0 9 * * 1-5" }
+              : { type: "manual" },
+        },
+      ],
     };
   }
 
@@ -145,14 +194,23 @@ export function Workspace({
   }
 
   function applyTemplate(template: Template) {
+    const nextVerifiers = normalizeVerifiers(template.definition?.verifiers);
     setSelected(template);
     setLoopName(template.definition?.name || "");
     setGoal(template.definition?.goal || "");
+    setVerifiers(nextVerifiers);
+    setEnabledVerifiers(nextVerifiers.map(() => true));
+    setTriggerMode(template.definition?.trigger?.type === "cron" ? "cron" : "manual");
+    if (template.definition?.trigger?.schedule) {
+      setCronSchedule(template.definition.trigger.schedule);
+    }
+    setNotice(`已选择 ${template.name}`);
   }
 
   function restoreProject(config: AnyRecord, availableTemplates = templates) {
     setProject(config?.name || "looptask");
     setRepository(config?.repository || "");
+    setProjectImported(Boolean(config?.repository));
     setBranch(config?.defaultBranch || "main");
     setStack((config?.techStack || []).join(", "));
     setDocs((config?.docs || []).join(", "));
@@ -164,8 +222,30 @@ export function Workspace({
       if (matching) setSelected(matching);
       setLoopName(loop.name || "");
       setGoal(loop.goal || "");
+      const nextVerifiers = normalizeVerifiers(loop.verifiers);
+      setVerifiers(nextVerifiers);
+      setEnabledVerifiers(nextVerifiers.map(() => true));
+      setTriggerMode(loop.trigger?.type === "cron" ? "cron" : "manual");
+      if (loop.trigger?.schedule) setCronSchedule(loop.trigger.schedule);
     }
     setNotice("已恢复保存的项目");
+  }
+
+  async function importProject() {
+    if (!repository.trim()) {
+      showToast("请先填写仓库地址，再导入项目。", true);
+      return;
+    }
+    await runAction("import", async () => {
+      await api("/api/v1/projects", {
+        method: "POST",
+        body: JSON.stringify(projectConfig),
+      });
+      setProjectImported(true);
+      setProjectModalOpen(false);
+      setNotice("项目已导入");
+      showToast("项目上下文已导入，Loop 可以继续配置。");
+    });
   }
 
   async function saveProject() {
@@ -174,6 +254,7 @@ export function Workspace({
         method: "POST",
         body: JSON.stringify(projectConfig),
       });
+      setProjectImported(Boolean(repository.trim()));
       setNotice("项目已保存");
       showToast("项目配置已安全保存。");
     });
@@ -190,6 +271,7 @@ export function Workspace({
         result.accepted ? "完整策略通过，可以预览或派发。" : "策略未通过，请检查 Loop 定义。",
         !result.accepted,
       );
+      if (result.accepted) setActiveStep(3);
     });
   }
 
@@ -202,6 +284,7 @@ export function Workspace({
       setStatus("已规划");
       setNotice("计划已生成");
       showToast(result.accepted ? "执行计划已生成。" : result.reason || "规划失败", !result.accepted);
+      if (result.accepted) setActiveStep(3);
     });
   }
 
@@ -262,27 +345,87 @@ export function Workspace({
       setter(event.target.value);
   }
 
+  function selectView(view: string) {
+    setActiveView(view);
+    if (view === "runs") {
+      document.getElementById("run-monitor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else if (view === "policies") {
+      setActiveStep(3);
+      document.getElementById("loop-builder")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
+  function updateVerifier(index: number, value: string) {
+    setVerifiers((current) =>
+      current.map((verifier, verifierIndex) =>
+        verifierIndex === index ? { ...verifier, command: value } : verifier,
+      ),
+    );
+  }
+
+  function addVerifier() {
+    setVerifiers((current) => [
+      ...current,
+      { name: `check-${current.length + 1}`, command: "", timeoutSeconds: 300 },
+    ]);
+    setEnabledVerifiers((current) => [...current, true]);
+  }
+
+  function removeVerifier(index: number) {
+    setVerifiers((current) => current.filter((_, verifierIndex) => verifierIndex !== index));
+    setEnabledVerifiers((current) => current.filter((_, verifierIndex) => verifierIndex !== index));
+  }
+
+  function toggleVerifier(index: number) {
+    setEnabledVerifiers((current) =>
+      current.map((enabled, verifierIndex) => (verifierIndex === index ? !enabled : enabled)),
+    );
+  }
+
   const displayName = user.displayName || "Operator";
   const currentRun = runs[0];
+  const activeVerifierCount = verifiers.filter(
+    (_, index) => enabledVerifiers[index] !== false,
+  ).length;
+  const readiness = [
+    { label: "项目", ready: Boolean(projectImported && repository.trim()) },
+    { label: "Prompt", ready: Boolean(goal.trim()) },
+    { label: "验收", ready: activeVerifierCount > 0 && verifiers.some((item, index) => enabledVerifiers[index] !== false && item.command.trim()) },
+    { label: "触发", ready: triggerMode === "manual" || Boolean(cronSchedule.trim()) },
+  ];
+  const readinessCount = readiness.filter((item) => item.ready).length;
+  const canRun =
+    readinessCount === readiness.length &&
+    Boolean(selected && loopName.trim()) &&
+    !busy;
+  const nextStepLabel = activeStep === 1 ? "配置验收" : activeStep === 2 ? "选择触发方式" : "检查并保存";
 
   return (
-    <div className="app">
+    <div className="app dashboard-app">
       <aside className="sidebar">
         <Brand kicker="Control plane" />
+        <div className="project-rail">
+          <div className="side-kicker">Active project</div>
+          <button className="project-switcher" onClick={() => setProjectModalOpen(true)} type="button">
+            <span className="project-avatar">{"</>"}</span>
+            <span className="project-rail-copy">
+              <strong>{projectImported ? project : "未关联项目"}</strong>
+              <small>{projectImported ? `${branch} · ${statusLabel(status)}` : "点击关联仓库"}</small>
+            </span>
+            <span className="project-chevron">↗</span>
+          </button>
+        </div>
         <div className="side-kicker">Workspace</div>
         <nav className="nav" aria-label="主导航">
           {[
-            ["workspace", "▣", "Loop workspace"],
-            ["runs", "⚑", "运行记录"],
-            ["policies", "◇", "安全策略"],
+            ["workspace", "01", "Loop workspace"],
+            ["runs", "02", "运行记录"],
+            ["policies", "03", "安全策略"],
           ].map(([view, icon, label]) => (
             <button
               className={activeView === view ? "active" : ""}
               key={view}
-              onClick={() => {
-                setActiveView(view);
-                if (view !== "workspace") showToast("这个视图会在 Loop 运行后承载对应记录。");
-              }}
+              onClick={() => selectView(view)}
               type="button"
             >
               <span className="nav-icon">{icon}</span>
@@ -306,119 +449,338 @@ export function Workspace({
       <main className="main">
         <header className="topbar">
           <div>
-            <div className="breadcrumb">Operations · {activeView === "workspace" ? "Loop workspace" : activeView}</div>
+            <div className="breadcrumb">Operations / {activeView === "workspace" ? "Loop workspace" : activeView}</div>
             <div className="top-title">Engineering control center</div>
           </div>
-          <div className="health"><i className="dot live" />服务在线</div>
+          <div className="topbar-right">
+            <span className="sync-label">{notice}</span>
+            <div className="health"><i className="dot live" />服务在线</div>
+          </div>
         </header>
 
-        <section className="page-intro">
-          <div><div className="eyebrow">Core operation</div><h1>Loop workspace</h1></div>
-          <span className="save-state">{notice}</span>
+        <section className="dashboard-hero">
+          <div className="hero-copy">
+            <div className="eyebrow">Loop control center</div>
+            <div className="hero-title-row">
+              <h1>{loopName || "Untitled Loop"}</h1>
+              <span className={`status-badge ${readinessCount === 4 ? "ready" : ""}`}>
+                {readinessCount === 4 ? "Ready to review" : "Draft"}
+              </span>
+            </div>
+            <p>{goal || "先写清楚你希望 Agent 完成什么，再选择可验证的验收方式。"}</p>
+            <div className="hero-meta">
+              <span className="meta-chip">{projectImported ? project : "未关联项目"}</span>
+              <span className="meta-chip">{TRIGGER_COPY[triggerMode].label}</span>
+              <span className="meta-chip">{activeVerifierCount} 个验收检查</span>
+            </div>
+          </div>
+          <div className="hero-actions">
+            <button className="secondary" onClick={() => setProjectModalOpen(true)} type="button">
+              {projectImported ? "编辑项目上下文" : "关联项目"}
+            </button>
+            <button className="primary dispatch-button" disabled={!canRun} onClick={() => void dispatch()} type="button">
+              {busy === "dispatch" ? "派发中…" : "派发 Loop"}
+              <span aria-hidden="true">→</span>
+            </button>
+          </div>
         </section>
-        <div className="page-toolbar">
-          <span>选择能力模板后，检查策略边界，再生成或派发执行计划。</span>
-          <button className="secondary" onClick={() => void loadWorkspace()} type="button">刷新模板</button>
-        </div>
 
-        <div className="workspace">
-          <section className="panel">
-            <PanelHead title="01 · 连接项目" label="CONTEXT" />
-            <div className="panel-body">
-              <div className="repo-preview">
-                <div className="repo-icon">⌘</div>
-                <div className="repo-copy">
-                  <strong>{repository ? project : "尚未关联仓库"}</strong>
-                  <span>{repository || "输入仓库地址后开始"}</span>
-                </div>
+        <section className="readiness-strip" aria-label="Loop 就绪度">
+          <div className="readiness-score">
+            <span className="eyebrow">Readiness</span>
+            <strong>{readinessCount}<small>/4</small></strong>
+            <span>{readinessCount === 4 ? "可以审阅并派发" : "完成输入后继续"}</span>
+          </div>
+          <div className="readiness-track">
+            {readiness.map((item, index) => (
+              <div className={`readiness-item ${item.ready ? "ready" : ""}`} key={item.label}>
+                <span className="readiness-number">0{index + 1}</span>
+                <span>{item.label}</span>
+                <i aria-hidden="true">{item.ready ? "✓" : "—"}</i>
               </div>
-              <Field label="GitHub repository URL"><input type="url" value={repository} onChange={updateField(setRepository)} placeholder="https://github.com/owner/repository" /></Field>
+            ))}
+          </div>
+        </section>
+
+        <section className="dashboard-grid">
+          <section className="panel builder-card" id="loop-builder">
+            <div className="panel-heading">
+              <div>
+                <div className="eyebrow">Loop definition</div>
+                <h2>把输入变成可执行 Loop</h2>
+                <p>每一步都留下可验证证据，未准备好时不会误派发。</p>
+              </div>
+              <div className="template-picker">
+                <label htmlFor="template-select">能力模板</label>
+                <select
+                  id="template-select"
+                  value={selected?.id || ""}
+                  onChange={(event) => {
+                    const template = templates.find((item) => item.id === event.target.value);
+                    if (template) applyTemplate(template);
+                  }}
+                >
+                  <option value="">选择模板</option>
+                  {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div className="loop-stepper" role="tablist" aria-label="Loop 配置步骤">
+              {[
+                ["1", "Prompt", "执行意图"],
+                ["2", "Acceptance", "验收证据"],
+                ["3", "Trigger", "触发审阅"],
+              ].map(([number, title, subtitle], index) => {
+                const step = (index + 1) as 1 | 2 | 3;
+                return (
+                  <button
+                    aria-selected={activeStep === step}
+                    className={`step-tab ${activeStep === step ? "active" : ""} ${step < activeStep ? "complete" : ""}`}
+                    key={number}
+                    onClick={() => setActiveStep(step)}
+                    role="tab"
+                    type="button"
+                  >
+                    <span>{step < activeStep ? "✓" : number}</span>
+                    <strong>{title}</strong>
+                    <small>{subtitle}</small>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="builder-content" role="tabpanel">
+              {activeStep === 1 && (
+                <div className="builder-step prompt-step">
+                  <div className="step-intro">
+                    <span className="step-icon">01</span>
+                    <div>
+                      <h3>先写清楚 Agent 要完成什么</h3>
+                      <p>Prompt 是 Loop 的执行意图，会随每次运行进入隔离的 Agent cell。</p>
+                    </div>
+                  </div>
+                  <Field label="Loop 名称">
+                    <input value={loopName} onChange={updateField(setLoopName)} placeholder="例如 docs-lifecycle-patrol" />
+                  </Field>
+                  <Field label="Prompt / 执行意图">
+                    <textarea
+                      className="prompt-input"
+                      value={goal}
+                      onChange={updateField(setGoal)}
+                      placeholder="例如：检查最近的实现变更，找出文档漂移，只在允许路径内提出有证据的修复建议。"
+                      rows={7}
+                    />
+                  </Field>
+                  <div className="input-hint"><span>建议写清楚目标、允许做什么、不能做什么。</span><code>{goal.length} chars</code></div>
+                  <div className="field-row">
+                    <Field label="Agent key"><input className="mono" value={agentKey} onChange={updateField(setAgentKey)} /></Field>
+                    <div className="inline-callout"><span className="callout-dot" />执行将在独立 worktree 中进行</div>
+                  </div>
+                </div>
+              )}
+
+              {activeStep === 2 && (
+                <div className="builder-step acceptance-step">
+                  <div className="step-intro">
+                    <span className="step-icon">02</span>
+                    <div>
+                      <h3>定义什么结果才算完成</h3>
+                      <p>每条验收命令会在 Agent 运行后执行，退出码与输出会进入运行证据。</p>
+                    </div>
+                  </div>
+                  <div className="acceptance-list">
+                    {verifiers.map((verifier, index) => {
+                      const enabled = enabledVerifiers[index] !== false;
+                      return (
+                        <div className={`acceptance-row ${enabled ? "" : "disabled"}`} key={`${verifier.name}-${index}`}>
+                          <button
+                            aria-pressed={enabled}
+                            className={`check-toggle ${enabled ? "checked" : ""}`}
+                            onClick={() => toggleVerifier(index)}
+                            title={enabled ? "停用此检查" : "启用此检查"}
+                            type="button"
+                          >
+                            {enabled ? "✓" : ""}
+                          </button>
+                          <div className="acceptance-fields">
+                            <input
+                              aria-label={`验收检查 ${index + 1} 名称`}
+                              className="check-name"
+                              value={verifier.name}
+                              onChange={(event) => setVerifiers((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))}
+                            />
+                            <div className="command-input">
+                              <span>$</span>
+                              <input
+                                aria-label={`验收命令 ${index + 1}`}
+                                className="mono"
+                                value={verifier.command}
+                                onChange={(event) => updateVerifier(index, event.target.value)}
+                                placeholder="输入验收命令，例如 npm test"
+                              />
+                            </div>
+                          </div>
+                          <span className="timeout-label">{verifier.timeoutSeconds}s</span>
+                          <button className="remove-check" onClick={() => removeVerifier(index)} title="删除验收检查" type="button">×</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <button className="add-check" onClick={addVerifier} type="button">+ 添加验收检查</button>
+                  <div className="evidence-note"><span>Evidence</span> 运行记录会保存命令、退出码、摘要与 Artifact 引用。</div>
+                </div>
+              )}
+
+              {activeStep === 3 && (
+                <div className="builder-step trigger-step">
+                  <div className="step-intro">
+                    <span className="step-icon">03</span>
+                    <div>
+                      <h3>选择何时让这个 Loop 开始</h3>
+                      <p>触发策略只决定派发时机，项目权限和安全闸门始终跟随每次运行。</p>
+                    </div>
+                  </div>
+                  <div className="trigger-options">
+                    {(Object.keys(TRIGGER_COPY) as TriggerMode[]).map((mode) => (
+                      <button className={`trigger-option ${triggerMode === mode ? "selected" : ""}`} key={mode} onClick={() => setTriggerMode(mode)} type="button">
+                        <span className="trigger-mark">{mode === "manual" ? "▶" : "◷"}</span>
+                        <span><strong>{TRIGGER_COPY[mode].label}</strong><small>{TRIGGER_COPY[mode].description}</small></span>
+                        <i>{triggerMode === mode ? "✓" : ""}</i>
+                      </button>
+                    ))}
+                    <div className="trigger-option unavailable">
+                      <span className="trigger-mark">∞</span>
+                      <span><strong>常驻执行 <em>规划中</em></strong><small>需要 Agent 长驻运行协议，当前版本不会伪装成可派发能力。</small></span>
+                      <i>—</i>
+                    </div>
+                  </div>
+                  {triggerMode === "cron" && (
+                    <Field label="Cron 表达式">
+                      <div className="cron-field"><span className="mono">cron</span><input className="mono" value={cronSchedule} onChange={updateField(setCronSchedule)} placeholder="0 9 * * 1-5" /></div>
+                      <small className="field-help">按 UTC 执行；例如工作日每天 09:00。</small>
+                    </Field>
+                  )}
+                  <div className="review-banner">
+                    <div className="review-icon">✓</div>
+                    <div><strong>派发前人工审阅</strong><span>{definition?.agent?.humanGate === false ? "当前模板允许自动继续。" : "当前模板会在变更前请求人工确认。"}</span></div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="builder-footer">
+              <span className="builder-progress">Step {activeStep} of 3 · {nextStepLabel}</span>
+              <div className="builder-actions">
+                {activeStep > 1 && <button className="quiet" onClick={() => setActiveStep((activeStep - 1) as 1 | 2 | 3)} type="button">← 上一步</button>}
+                {activeStep < 3 ? (
+                  <button className="secondary" onClick={() => setActiveStep((activeStep + 1) as 1 | 2 | 3)} type="button">继续：{nextStepLabel} →</button>
+                ) : (
+                  <>
+                    <button className="secondary" disabled={!!busy} onClick={() => void saveProject()} type="button">{busy === "save" ? "保存中…" : "保存草稿"}</button>
+                    <button className="primary" disabled={!!busy || !selected} onClick={() => void validate()} type="button">{busy === "validate" ? "验证中…" : "验证完整策略"}</button>
+                  </>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <aside className="inspector-column">
+            <section className="panel inspector-card">
+              <div className="panel-heading compact">
+                <div><div className="eyebrow">Context</div><h2>运行上下文</h2></div>
+                <button className="icon-button" onClick={() => setProjectModalOpen(true)} title="编辑项目上下文" type="button">↗</button>
+              </div>
+              <div className="context-card">
+                <div className="context-icon">{"</>"}</div>
+                <div><strong>{projectImported ? project : "尚未关联项目"}</strong><span>{repository || "关联仓库后，Loop 才能运行"}</span></div>
+              </div>
+              <div className="context-details">
+                <Policy title="分支" value={branch || "—"} />
+                <Policy title="技术栈" value={stack || "—"} />
+                <Policy title="运行模式" value={definition?.mode || "—"} />
+                <Policy title="Agent cell" value={agentKey || "default"} />
+              </div>
+              <button className="text-action" onClick={() => setProjectModalOpen(true)} type="button">{projectImported ? "查看项目设置" : "关联项目开始配置"} <span>→</span></button>
+            </section>
+
+            <section className="panel safety-card">
+              <div className="panel-heading compact">
+                <div><div className="eyebrow">Guardrails</div><h2>安全边界</h2></div>
+                <span className="safe-label"><i className="dot live" />受控</span>
+              </div>
+              <div className="guardrail-list">
+                <div><span className="guardrail-icon">✓</span><span>独立 worktree 执行</span></div>
+                <div><span className="guardrail-icon">✓</span><span>保护分支：{definition?.safety?.protectedBranches?.join(" / ") || "main"}</span></div>
+                <div><span className="guardrail-icon">✓</span><span>预算：{definition?.budget?.maxDurationMinutes || 30} 分钟 · {definition?.budget?.maxToolCalls || 200} 次调用</span></div>
+                <div><span className="guardrail-icon">!</span><span>无法安全判断时升级给人工</span></div>
+              </div>
+              <button className="text-action" onClick={() => { setActiveStep(3); document.getElementById("loop-builder")?.scrollIntoView({ behavior: "smooth" }); }} type="button">查看触发与闸门 <span>→</span></button>
+            </section>
+          </aside>
+        </section>
+
+        <section className="panel monitor-panel" id="run-monitor">
+          <div className="monitor-main">
+            <div className="monitor-heading">
+              <div><div className="eyebrow">Live run monitor</div><h2>{currentRun ? `${currentRun.loopName} · ${statusLabel(currentRun.status)}` : "还没有运行"}</h2></div>
+              <span className="run-status active"><i className="dot live" />{status}</span>
+            </div>
+            <div className="metrics">
+              <Metric value={events.length ? String(events.length) : "—"} label="Inbox events" />
+              <Metric value={currentRun ? "1" : "—"} label="Active run" />
+              <Metric value={currentRun?.status === "passed" ? "100%" : "—"} label="Acceptance" />
+            </div>
+            <div className="section-label">运行事件 <span>按时间顺序记录</span></div>
+            <div className="timeline">
+              {events.length ? events.map((event) => <div className="event" key={event.id}><strong>{event.eventType}</strong><span>{JSON.stringify(event.payloadJson)}</span></div>) : <Empty>验证或派发之后，运行事件会按最新顺序出现在这里。</Empty>}
+            </div>
+            <div className="identity">Agent cell identity · <code>{project || "project"} / {loopName || "loop"} / {agentKey || "agent"}</code></div>
+          </div>
+          <div className="monitor-side">
+            <div className="side-title">Recent runs</div>
+            <div className="recent-runs">{runs.length ? runs.slice(0, 6).map((run) => <button className="recent-run" key={run.id} onClick={() => void loadEvents(run.id)} type="button"><span><strong>{run.projectName} · {run.loopName}</strong><span>{run.agentCellId}</span></span><b className="recent-run-status">{statusLabel(run.status)}</b></button>) : <Empty>还没有持久化的运行记录。</Empty>}</div>
+            <div className="side-title side-title-gap">Decision branches</div>
+            <div className="decision-list">{(definition?.decisionRules || []).slice(0, 4).map((rule: AnyRecord) => <div className="decision" key={rule.signal}><strong>{rule.signal}</strong><span>{rule.action}</span></div>)}</div>
+            <p className="footer-note">每个分支都必须留下证据；无法安全判断时，停止并升级给人。</p>
+          </div>
+        </section>
+
+        {toast && <div className={`toast show ${error ? "error" : ""}`} role="status">{toast}</div>}
+      </main>
+
+      {projectModalOpen && (
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setProjectModalOpen(false); }}>
+          <div aria-labelledby="project-dialog-title" aria-modal="true" className="project-dialog" role="dialog">
+            <div className="dialog-heading">
+              <div><div className="eyebrow">Project context</div><h2 id="project-dialog-title">{projectImported ? "编辑项目上下文" : "关联一个项目"}</h2><p>先导入仓库，再把 Loop 绑定到明确的分支和路径。</p></div>
+              <button className="dialog-close" onClick={() => setProjectModalOpen(false)} title="关闭" type="button">×</button>
+            </div>
+            <div className="dialog-body">
+              <Field label="GitHub repository URL"><input autoFocus type="url" value={repository} onChange={updateField(setRepository)} placeholder="https://github.com/owner/repository" /></Field>
               <div className="grid-2">
                 <Field label="项目名称"><input value={project} onChange={updateField(setProject)} /></Field>
                 <Field label="默认分支"><input className="mono" value={branch} onChange={updateField(setBranch)} /></Field>
               </div>
-              <details className="advanced">
-                <summary>高级上下文设置</summary>
-                <div className="grid-2">
-                  <Field label="文档路径"><input className="mono" value={docs} onChange={updateField(setDocs)} /></Field>
-                  <Field label="源码路径"><input className="mono" value={source} onChange={updateField(setSource)} /></Field>
+              <button className="advanced-toggle" onClick={() => setAdvancedOpen((open) => !open)} type="button"><span>{advancedOpen ? "⌄" : "›"}</span> 高级上下文设置</button>
+              {advancedOpen && (
+                <div className="advanced-fields">
+                  <div className="grid-2">
+                    <Field label="文档路径"><input className="mono" value={docs} onChange={updateField(setDocs)} /></Field>
+                    <Field label="源码路径"><input className="mono" value={source} onChange={updateField(setSource)} /></Field>
+                  </div>
+                  <Field label="技术栈"><input className="mono" value={stack} onChange={updateField(setStack)} /></Field>
+                  <Field label="celld URL"><input className="mono" value={celld} onChange={updateField(setCelld)} /></Field>
                 </div>
-                <Field label="技术栈"><input className="mono" value={stack} onChange={updateField(setStack)} /></Field>
-                <Field label="celld URL"><input className="mono" value={celld} onChange={updateField(setCelld)} /></Field>
-              </details>
+              )}
             </div>
-          </section>
-
-          <section className="panel">
-            <PanelHead title="02 · 选择 Loop 能力" label="CAPABILITY" />
-            <div className="panel-body">
-              <div className="template-list">
-                {templates.length ? templates.map((template) => (
-                  <button className={`template ${selected?.id === template.id ? "selected" : ""}`} key={template.id} onClick={() => applyTemplate(template)} type="button">
-                    <div className="template-top"><span className="template-title">{template.name}</span><span className="template-badge">{template.kind}</span></div>
-                    <div className="template-summary">{template.summary}</div>
-                    <div className="tags">{(template.capabilityTags || []).map((tag: string) => <span key={tag}>{tag}</span>)}</div>
-                  </button>
-                )) : <Empty>暂无能力模板。</Empty>}
-              </div>
+            <div className="dialog-footer">
+              <span><i className="dot live" />只保存项目配置，不会自动派发 Loop</span>
+              <div><button className="quiet" onClick={() => setProjectModalOpen(false)} type="button">取消</button><button className="primary" disabled={busy === "import"} onClick={() => void importProject()} type="button">{busy === "import" ? "导入中…" : projectImported ? "保存项目上下文" : "导入项目"} <span>→</span></button></div>
             </div>
-          </section>
-
-          <section className="panel wide">
-            <PanelHead title="03 · Loop 执行台" label="EXECUTION" />
-            <div className="panel-body">
-              <div className="definition-head">
-                <div><div className="definition-name">{definition?.name || "等待选择能力模板"}</div><div className="definition-goal">{selected?.summary || definition?.goal || "模板加载后，这里会显示它解决的问题与运行目标。"}</div></div>
-                <span className="mode">{definition?.mode || "—"}</span>
-              </div>
-              <div className="grid-2">
-                <Field label="Loop 名称"><input value={loopName} onChange={updateField(setLoopName)} /></Field>
-                <Field label="Agent key"><input className="mono" value={agentKey} onChange={updateField(setAgentKey)} /></Field>
-              </div>
-              <Field label="本次目标描述"><textarea value={goal} onChange={updateField(setGoal)} placeholder="选择模板后生成目标描述" /></Field>
-              <div className="section-label">执行阶段</div>
-              <div className="stages">
-                {(definition?.steps || []).map((step: AnyRecord, index: number) => (
-                  <div className="stage" key={`${step.title}-${index}`}><div className="stage-no">{String(index + 1).padStart(2, "0")}</div><div><div className="stage-title">{step.title}</div><div className="stage-purpose">{step.purpose}</div><span className="stage-safety">{step.allowedPaths?.length ? `白名单：${step.allowedPaths.join("、")}` : "受控操作"}</span></div></div>
-                ))}
-                {!definition?.steps?.length && <Empty>选择一个模板查看阶段。</Empty>}
-              </div>
-              <div className="policy-grid">
-                <Policy title="时间预算" value={`${definition?.budget?.maxDurationMinutes || 30} 分钟`} />
-                <Policy title="调用预算" value={`${definition?.budget?.maxToolCalls || 200} 次工具调用`} />
-                <Policy title="允许路径" value={definition?.safety?.allowedPaths?.join("、") || "不写入"} safe />
-                <Policy title="保护分支" value={definition?.safety?.protectedBranches?.join("、") || "—"} safe />
-              </div>
-              <div className="section-label section-label-gap">不可绕过的闸门</div>
-              <div className="guardrails">{[...(definition?.safety?.forbiddenActions || []), ...(definition?.escalationRules || [])].map((rule: string) => <div className="guardrail" key={rule}>{rule}</div>)}</div>
-              <div className="action-bar">
-                <button className="secondary" disabled={!!busy} onClick={() => void saveProject()} type="button">{busy === "save" ? "保存中…" : "保存项目"}</button>
-                <button className="secondary" disabled={!!busy} onClick={() => void validate()} type="button">{busy === "validate" ? "验证中…" : "验证完整策略"}</button>
-                <button className="primary" disabled={!!busy} onClick={() => void plan()} type="button">{busy === "plan" ? "生成中…" : "预览执行计划"}</button>
-                <button className="primary" disabled={!!busy} onClick={() => void dispatch()} type="button">{busy === "dispatch" ? "派发中…" : "派发 Loop"}</button>
-              </div>
-            </div>
-          </section>
-
-          <section className="panel wide monitor">
-            <div className="monitor-main">
-              <div className="run-header"><div><div className="eyebrow">Live run monitor</div><div className="run-title">{currentRun ? `${currentRun.loopName} · ${statusLabel(currentRun.status)}` : "还没有运行"}</div></div><span className="run-status active"><i className="dot live" />{status}</span></div>
-              <div className="metrics"><Metric value="—" label="Inbox events" /><Metric value="—" label="Tasks" /><Metric value="—" label="Artifacts" /></div>
-              <div className="section-label">运行事件</div>
-              <div className="timeline">{events.length ? events.map((event) => <div className="event" key={event.id}><strong>{event.eventType}</strong><span>{JSON.stringify(event.payloadJson)}</span></div>) : <Empty>验证或派发之后，运行事件会按最新顺序出现在这里。</Empty>}</div>
-              <div className="identity">Agent cell identity · <code>{project || "project"} / {loopName || "loop"} / {agentKey || "agent"}</code></div>
-            </div>
-            <div className="monitor-side">
-              <div className="side-title">Recent runs</div>
-              <div className="recent-runs">{runs.length ? runs.slice(0, 6).map((run) => <button className="recent-run" key={run.id} onClick={() => void loadEvents(run.id)} type="button"><span><strong>{run.projectName} · {run.loopName}</strong><span>{run.agentCellId}</span></span><b className="recent-run-status">{statusLabel(run.status)}</b></button>) : <Empty>还没有持久化的运行记录。</Empty>}</div>
-              <div className="side-title side-title-gap">Decision branches</div>
-              <div className="decision-list">{(definition?.decisionRules || []).map((rule: AnyRecord) => <div className="decision" key={rule.signal}><strong>{rule.signal}</strong><span>{rule.action}</span></div>)}</div>
-              <p className="footer-note">Loop 的每个分支都必须留下证据；无法安全判断时，停止并升级给人。</p>
-            </div>
-          </section>
+          </div>
         </div>
-        {toast && <div className={`toast show ${error ? "error" : ""}`} role="status">{toast}</div>}
-      </main>
+      )}
     </div>
   );
 }
@@ -427,16 +789,12 @@ function Brand({ kicker }: { kicker: string }) {
   return <div className="brand"><div className="brand-mark" aria-hidden="true">↻</div><div><div className="brand-name">looptask</div><div className="brand-kicker">{kicker}</div></div></div>;
 }
 
-function PanelHead({ title, label }: { title: string; label: string }) {
-  return <div className="panel-head"><div><h2>{title}</h2></div><span className="step-count">{label}</span></div>;
-}
-
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className="field"><label>{label}</label>{children}</div>;
 }
 
-function Policy({ title, value, safe = false }: { title: string; value: string; safe?: boolean }) {
-  return <div className={`policy ${safe ? "safe" : "warning"}`}><strong>{title}</strong><b>{value}</b></div>;
+function Policy({ title, value }: { title: string; value: string }) {
+  return <div className="policy"><span>{title}</span><strong>{value}</strong></div>;
 }
 
 function Metric({ value, label }: { value: string; label: string }) {
@@ -449,6 +807,18 @@ function Empty({ children }: { children: React.ReactNode }) {
 
 function splitList(value: string) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function splitCommand(value: string) {
+  return value.trim().split(/\s+/).filter(Boolean);
+}
+
+function normalizeVerifiers(value: AnyRecord[] | undefined): VerifierDraft[] {
+  return (value || []).map((verifier) => ({
+    name: verifier.name || "acceptance-check",
+    command: Array.isArray(verifier.command) ? verifier.command.join(" ") : String(verifier.command || ""),
+    timeoutSeconds: Number(verifier.timeoutSeconds || 300),
+  }));
 }
 
 function statusLabel(status: string) {
