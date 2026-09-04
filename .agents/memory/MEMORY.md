@@ -1,3 +1,4 @@
 - [Pages custom-domain verification](pages-custom-domain-verification.md) — a custom domain can report active before serving the newest deployment; verify live headers and asset markers too.
 - [Replit production SQLx migrations](replit-production-sqlx-migrations.md) — Publish syncs schema but not SQLx history; production must not replay migration DDL at startup.
 - [Mockup sandbox dependencies](mockup-sandbox-dependencies.md) — createArtifact scaffolds the sandbox but does not install its npm dependencies before the preview workflow starts.
+- [GitHub connector write limits](github-connector-write-limits.md) — REST blob uploads may hit a Replit/Cloudflare block after repeated writes; native client and shell push are not interchangeable.
