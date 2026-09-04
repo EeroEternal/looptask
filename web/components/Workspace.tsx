@@ -7,7 +7,7 @@ type AnyRecord = Record<string, any>;
 type Template = AnyRecord & { id: string; definition: AnyRecord };
 type Run = AnyRecord & { id: string; status: string };
 type User = { displayName?: string; email?: string };
-type TriggerMode = "manual" | "cron";
+type TriggerMode = "manual" | "cron" | "resident";
 type VerifierDraft = {
   name: string;
   command: string;
@@ -29,6 +29,10 @@ const TRIGGER_COPY: Record<TriggerMode, { label: string; description: string }> 
   cron: {
     label: "定时执行",
     description: "按 Cron 计划运行，并在每次派发前保留安全闸门。",
+  },
+  resident: {
+    label: "常驻执行",
+    description: "由 celld 持久化唤醒，按固定间隔重复进入 Agent cell。",
   },
 };
 
@@ -57,6 +61,7 @@ export function Workspace({
   const [enabledVerifiers, setEnabledVerifiers] = useState<boolean[]>([]);
   const [triggerMode, setTriggerMode] = useState<TriggerMode>("manual");
   const [cronSchedule, setCronSchedule] = useState("0 9 * * 1-5");
+  const [residentInterval, setResidentInterval] = useState(900);
   const [status, setStatus] = useState("待命");
   const [notice, setNotice] = useState("未开始运行");
   const [activeView, setActiveView] = useState("workspace");
@@ -85,6 +90,7 @@ export function Workspace({
     enabledVerifiers,
     triggerMode,
     cronSchedule,
+    residentInterval,
   ]);
 
   useEffect(() => {
@@ -162,6 +168,8 @@ export function Workspace({
           trigger:
             triggerMode === "cron"
               ? { type: "cron", schedule: cronSchedule.trim() || "0 9 * * 1-5" }
+              : triggerMode === "resident"
+                ? { type: "resident", intervalSeconds: residentInterval }
               : { type: "manual" },
         },
       ],
@@ -200,9 +208,19 @@ export function Workspace({
     setGoal(template.definition?.goal || "");
     setVerifiers(nextVerifiers);
     setEnabledVerifiers(nextVerifiers.map(() => true));
-    setTriggerMode(template.definition?.trigger?.type === "cron" ? "cron" : "manual");
+    const templateTrigger = template.definition?.trigger;
+    setTriggerMode(
+      templateTrigger?.type === "cron"
+        ? "cron"
+        : templateTrigger?.type === "resident"
+          ? "resident"
+          : "manual",
+    );
     if (template.definition?.trigger?.schedule) {
       setCronSchedule(template.definition.trigger.schedule);
+    }
+    if (templateTrigger?.intervalSeconds) {
+      setResidentInterval(Number(templateTrigger.intervalSeconds));
     }
     setNotice(`已选择 ${template.name}`);
   }
@@ -225,8 +243,17 @@ export function Workspace({
       const nextVerifiers = normalizeVerifiers(loop.verifiers);
       setVerifiers(nextVerifiers);
       setEnabledVerifiers(nextVerifiers.map(() => true));
-      setTriggerMode(loop.trigger?.type === "cron" ? "cron" : "manual");
+      setTriggerMode(
+        loop.trigger?.type === "cron"
+          ? "cron"
+          : loop.trigger?.type === "resident"
+            ? "resident"
+            : "manual",
+      );
       if (loop.trigger?.schedule) setCronSchedule(loop.trigger.schedule);
+      if (loop.trigger?.intervalSeconds) {
+        setResidentInterval(Number(loop.trigger.intervalSeconds));
+      }
     }
     setNotice("已恢复保存的项目");
   }
@@ -299,10 +326,34 @@ export function Workspace({
           idempotencyKey: crypto.randomUUID(),
         }),
       });
-      setStatus("运行中");
-      setNotice(result.deduplicated ? "已复用原运行" : "正在运行");
-      showToast(result.deduplicated ? "检测到重复派发，已复用原运行。" : "Loop 已进入 Agent cell。");
+       setStatus(triggerMode === "resident" ? "常驻中" : "运行中");
+       setNotice(
+         triggerMode === "resident"
+           ? `常驻已启动 · 每 ${formatInterval(residentInterval)} 唤醒`
+           : result.deduplicated
+             ? "已复用原运行"
+             : "正在运行",
+       );
+       showToast(
+         triggerMode === "resident"
+           ? `常驻 Loop 已启动，将每 ${formatInterval(residentInterval)} 唤醒 Agent cell。`
+           : result.deduplicated
+             ? "检测到重复派发，已复用原运行。"
+             : "Loop 已进入 Agent cell。",
+       );
       await loadRuns();
+    });
+  }
+
+  async function stopResident() {
+    await runAction("stop-resident", async () => {
+      const result = await api<AnyRecord>("/api/v1/loops/resident/stop", {
+        method: "POST",
+        body: JSON.stringify({ project: projectConfig, loopName, agentKey }),
+      });
+      setStatus("已停止");
+      setNotice(`常驻已停止 · 取消 ${result.cancelled || 0} 个唤醒`);
+      showToast(`常驻执行已停止，取消 ${result.cancelled || 0} 个持久化唤醒。`);
     });
   }
 
@@ -391,7 +442,13 @@ export function Workspace({
     { label: "项目", ready: Boolean(projectImported && repository.trim()) },
     { label: "Prompt", ready: Boolean(goal.trim()) },
     { label: "验收", ready: activeVerifierCount > 0 && verifiers.some((item, index) => enabledVerifiers[index] !== false && item.command.trim()) },
-    { label: "触发", ready: triggerMode === "manual" || Boolean(cronSchedule.trim()) },
+    {
+      label: "触发",
+      ready:
+        triggerMode === "manual" ||
+        (triggerMode === "cron" && Boolean(cronSchedule.trim())) ||
+        (triggerMode === "resident" && residentInterval >= 60),
+    },
   ];
   const readinessCount = readiness.filter((item) => item.ready).length;
   const canRun =
@@ -478,6 +535,11 @@ export function Workspace({
             <button className="secondary" onClick={() => setProjectModalOpen(true)} type="button">
               {projectImported ? "编辑项目上下文" : "关联项目"}
             </button>
+            {triggerMode === "resident" && (status === "常驻中" || status === "运行中") && (
+              <button className="secondary danger-action" disabled={!!busy} onClick={() => void stopResident()} type="button">
+                {busy === "stop-resident" ? "停止中…" : "停止常驻"}
+              </button>
+            )}
             <button className="primary dispatch-button" disabled={!canRun} onClick={() => void dispatch()} type="button">
               {busy === "dispatch" ? "派发中…" : "派发 Loop"}
               <span aria-hidden="true">→</span>
@@ -644,21 +706,34 @@ export function Workspace({
                   <div className="trigger-options">
                     {(Object.keys(TRIGGER_COPY) as TriggerMode[]).map((mode) => (
                       <button className={`trigger-option ${triggerMode === mode ? "selected" : ""}`} key={mode} onClick={() => setTriggerMode(mode)} type="button">
-                        <span className="trigger-mark">{mode === "manual" ? "▶" : "◷"}</span>
+                        <span className="trigger-mark">{mode === "manual" ? "▶" : mode === "cron" ? "◷" : "∞"}</span>
                         <span><strong>{TRIGGER_COPY[mode].label}</strong><small>{TRIGGER_COPY[mode].description}</small></span>
                         <i>{triggerMode === mode ? "✓" : ""}</i>
                       </button>
                     ))}
-                    <div className="trigger-option unavailable">
-                      <span className="trigger-mark">∞</span>
-                      <span><strong>常驻执行 <em>规划中</em></strong><small>需要 Agent 长驻运行协议，当前版本不会伪装成可派发能力。</small></span>
-                      <i>—</i>
-                    </div>
                   </div>
                   {triggerMode === "cron" && (
                     <Field label="Cron 表达式">
                       <div className="cron-field"><span className="mono">cron</span><input className="mono" value={cronSchedule} onChange={updateField(setCronSchedule)} placeholder="0 9 * * 1-5" /></div>
                       <small className="field-help">按 UTC 执行；例如工作日每天 09:00。</small>
+                    </Field>
+                  )}
+                  {triggerMode === "resident" && (
+                    <Field label="唤醒间隔">
+                      <div className="cron-field">
+                        <span className="mono">every</span>
+                        <input
+                          className="mono"
+                          min={60}
+                          type="number"
+                          value={residentInterval}
+                          onChange={(event) => setResidentInterval(Number(event.target.value) || 0)}
+                        />
+                        <span className="mono">seconds</span>
+                      </div>
+                      <small className="field-help">
+                        celld 会持久化下一次唤醒；最短 60 秒，当前间隔为每 {formatInterval(residentInterval)}。
+                      </small>
                     </Field>
                   )}
                   <div className="review-banner">
@@ -811,6 +886,13 @@ function splitList(value: string) {
 
 function splitCommand(value: string) {
   return value.trim().split(/\s+/).filter(Boolean);
+}
+
+function formatInterval(seconds: number) {
+  if (seconds >= 86400 && seconds % 86400 === 0) return `${seconds / 86400} 天`;
+  if (seconds >= 3600 && seconds % 3600 === 0) return `${seconds / 3600} 小时`;
+  if (seconds >= 60 && seconds % 60 === 0) return `${seconds / 60} 分钟`;
+  return `${seconds} 秒`;
 }
 
 function normalizeVerifiers(value: AnyRecord[] | undefined): VerifierDraft[] {

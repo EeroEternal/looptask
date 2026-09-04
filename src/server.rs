@@ -75,6 +75,7 @@ pub fn create_router_with_state(state: AppState) -> Router {
         .route("/api/v1/runtime/celld", post(describe_celld_runtime))
         .route("/api/v1/loops/plan", post(plan_loop))
         .route("/api/v1/loops/dispatch", post(dispatch_loop))
+        .route("/api/v1/loops/resident/stop", post(stop_resident))
         .route("/api/v1/celld/agents/state", post(celld_agent_state))
         .route("/api/v1/celld/agents/inbox", post(celld_agent_inbox))
         .route("/api/v1/celld/agents/artifacts", post(celld_agent_artifact))
@@ -364,12 +365,18 @@ fn build_loop_plan(
     project: &Project,
     loop_name: &str,
 ) -> std::result::Result<LoopDefinition, String> {
-    project
+    let loop_def = project
         .loops
         .iter()
         .find(|candidate| candidate.name == loop_name)
         .cloned()
-        .ok_or_else(|| format!("loop '{loop_name}' not found"))
+        .ok_or_else(|| format!("loop '{loop_name}' not found"))?;
+    if let crate::models::Trigger::Resident { interval_seconds } = &loop_def.trigger {
+        if !(60..=31_536_000).contains(interval_seconds) {
+            return Err("resident interval must be between 60 seconds and 365 days".to_string());
+        }
+    }
+    Ok(loop_def)
 }
 
 async fn plan_loop(
@@ -490,8 +497,17 @@ async fn dispatch_loop(
             "kind": loop_def.kind,
             "goal": loop_def.goal,
             "mode": loop_def.mode,
+            "resident": match &loop_def.trigger {
+                crate::models::Trigger::Resident { interval_seconds } => {
+                    Some(json!({ "intervalSeconds": interval_seconds }))
+                }
+                _ => None,
+            },
         }),
-        wake_at: None,
+        wake_at: match &loop_def.trigger {
+            crate::models::Trigger::Resident { .. } => Some(chrono::Utc::now()),
+            _ => None,
+        },
     };
 
     let client = celld::CelldClient::for_project(&request.project)?;
@@ -522,6 +538,25 @@ async fn dispatch_loop(
         run_id: prepared_run.map(|run| run.id),
         deduplicated: false,
     }))
+}
+
+async fn stop_resident(
+    Extension(_authenticated): Extension<AuthenticatedUser>,
+    Json(request): Json<LoopPlanRequest>,
+) -> Result<Json<celld::ResidentCancelAck>> {
+    let loop_def = build_loop_plan(&request.project, &request.loop_name).map_err(Error::Config)?;
+    if !matches!(&loop_def.trigger, crate::models::Trigger::Resident { .. }) {
+        return Err(Error::Config(
+            "the selected loop is not configured for resident execution".to_string(),
+        ));
+    }
+    let agent_cell_id = celld::agent_cell_id(&request.project, &loop_def, &request.agent_key);
+    let client = celld::CelldClient::for_project(&request.project)?;
+    Ok(Json(
+        client
+            .cancel_resident(&agent_cell_id, &loop_def.name)
+            .await?,
+    ))
 }
 
 async fn celld_agent_state(

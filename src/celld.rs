@@ -164,6 +164,12 @@ pub struct ArtifactAck {
     pub id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResidentCancelAck {
+    pub cancelled: u32,
+}
+
 /// HTTP client for the celld Durable Object app (`celld/src/worker.js`).
 ///
 /// Agent cell IDs (e.g. `looptask/docs-sync/docs`) commonly contain `/`.
@@ -260,6 +266,23 @@ impl CelldClient {
             .http
             .post(url)
             .json(artifact)
+            .send()
+            .await
+            .map_err(celld_request_error)?;
+        read_celld_json(response).await
+    }
+
+    /// Cancels all persisted resident schedules for a loop in an agent cell.
+    pub async fn cancel_resident(
+        &self,
+        agent_cell_id: &str,
+        loop_name: &str,
+    ) -> Result<ResidentCancelAck> {
+        let url = self.cell_url(agent_cell_id, &["resident", "cancel"])?;
+        let response = self
+            .http
+            .post(url)
+            .json(&serde_json::json!({ "loop": loop_name }))
             .send()
             .await
             .map_err(celld_request_error)?;

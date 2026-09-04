@@ -178,6 +178,10 @@ pub enum Trigger {
     Cron {
         schedule: String,
     },
+    Resident {
+        #[serde(default = "default_resident_interval_seconds")]
+        interval_seconds: u64,
+    },
     GitHubEvent {
         event: String,
     },
@@ -306,6 +310,10 @@ fn default_branch() -> String {
 
 fn default_timeout_seconds() -> u64 {
     300
+}
+
+fn default_resident_interval_seconds() -> u64 {
+    900
 }
 
 fn default_hot_message_limit() -> u32 {
