@@ -1,5 +1,6 @@
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{Extension, Path, State},
     http::{
         HeaderMap, HeaderValue, Request, StatusCode,
@@ -10,16 +11,20 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
+use chrono::Utc;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::Sha256;
 use sqlx::PgPool;
-use std::path::Path as FilePath;
+use std::{env, path::Path as FilePath};
 use tower_http::trace::TraceLayer;
 
 use crate::{
     Error, Result,
     auth::{
-        AuthState, AuthenticatedUser, CodeRequest, CodeResponse, CodeVerification, SessionResponse,
+        AuthState, AuthenticatedUser, CodeRequest, CodeResponse, CodeVerification, EmailSender,
+        SessionResponse,
     },
     celld,
     loop_catalog::{LoopValidationRequest, LoopValidationResponse},
@@ -70,6 +75,11 @@ pub fn create_router_with_state(state: AppState) -> Router {
         .route("/api/v1/projects/{project_id}", get(get_project))
         .route("/api/v1/runs", get(list_runs))
         .route("/api/v1/runs/{run_id}/events", get(list_run_events))
+        .route(
+            "/api/v1/runs/{run_id}/merge-confirmation",
+            post(record_merge_confirmation),
+        )
+        .route("/api/v1/github/repositories", get(list_github_repositories))
         .route("/api/v1/loop-templates", get(loop_templates))
         .route("/api/v1/loops/validate", post(validate_loop))
         .route("/api/v1/runtime/celld", post(describe_celld_runtime))
@@ -92,6 +102,10 @@ pub fn create_router_with_state(state: AppState) -> Router {
         .route("/api/v1/auth/verify-code", post(verify_auth_code))
         .route("/api/v1/auth/me", get(auth_me))
         .route("/api/v1/auth/logout", post(logout))
+        .route(
+            "/api/v1/runs/{run_id}/completion",
+            post(executor_completion),
+        )
         .merge(protected)
         .route("/{*path}", get(static_asset))
         .layer(TraceLayer::new_for_http())
@@ -317,6 +331,16 @@ async fn list_runs(
     Ok(Json(store.list_runs(authenticated.user.id, 50).await?))
 }
 
+async fn list_github_repositories(
+    Extension(_authenticated): Extension<AuthenticatedUser>,
+) -> Result<Json<Vec<crate::github::GitHubRepository>>> {
+    Ok(Json(
+        crate::github::GitHubClient::from_env()?
+            .accessible_repositories()
+            .await?,
+    ))
+}
+
 async fn list_run_events(
     Path(run_id): Path<uuid::Uuid>,
     State(state): State<AppState>,
@@ -329,6 +353,324 @@ async fn list_run_events(
     Ok(Json(
         store.list_run_events(authenticated.user.id, run_id).await?,
     ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExecutorCompletion {
+    callback_id: String,
+    dispatch_id: String,
+    success: bool,
+    head_branch: String,
+    head_sha: String,
+    summary: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MergeConfirmationRequest {
+    decision: String,
+}
+
+async fn executor_completion(
+    Path(run_id): Path<uuid::Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<Value>> {
+    verify_executor_signature(&headers, &body)?;
+    let completion: ExecutorCompletion = serde_json::from_slice(&body)
+        .map_err(|_| Error::Config("invalid completion JSON".to_string()))?;
+    validate_completion(&completion)?;
+    let store = state
+        .projects
+        .as_ref()
+        .ok_or_else(|| Error::Internal(anyhow::anyhow!("project persistence is unavailable")))?;
+    let claim = store
+        .claim_completion_callback(run_id, &completion.callback_id, &completion.dispatch_id)
+        .await?;
+    if !claim.acquired_processing {
+        return Ok(Json(
+            json!({"runId":run_id,"status":"processing","reused":true}),
+        ));
+    }
+    let context = claim.context;
+    if !completion.success {
+        if context.status != "running" && context.status != "failed" {
+            store.finish_completion_processing(run_id).await?;
+            return Err(Error::Config(
+                "run is no longer eligible for a failure completion".to_string(),
+            ));
+        }
+        if context.status != "failed" {
+            store.mark_failed(run_id, &completion.summary).await?;
+        } else {
+            store.finish_completion_processing(run_id).await?;
+        }
+        return Ok(Json(json!({"runId": run_id, "status": "failed"})));
+    }
+    if let (Some(number), Some(url)) = (context.pr_number, context.pr_url.clone()) {
+        deliver_confirmation_email(store, run_id, &context, &url).await?;
+        return Ok(Json(
+            json!({"runId":run_id,"status":"needs-human","prNumber":number,"prUrl":url,"reused":true}),
+        ));
+    }
+    if context.status != "running" {
+        store.finish_completion_processing(run_id).await?;
+        return Err(Error::Config(
+            "run is no longer eligible for a successful completion".to_string(),
+        ));
+    }
+    let repository = context
+        .repository
+        .as_deref()
+        .ok_or_else(|| Error::Config("run project has no repository".to_string()))?;
+    let repo = crate::github::parse_repository(repository)?;
+    let github = crate::github::GitHubClient::from_env()?;
+    github
+        .verify_branch_sha(&repo, &completion.head_branch, &completion.head_sha)
+        .await?;
+    let pr = github
+        .create_or_find_pr(
+            &repo,
+            &completion.head_branch,
+            &context.default_branch,
+            &format!("looptask: {}", context.loop_name),
+            &format!("Automated task: {}\n\n{}", context.goal, completion.summary),
+        )
+        .await?;
+    store
+        .persist_pr(
+            run_id,
+            pr.number,
+            &pr.html_url,
+            &completion.head_branch,
+            &completion.head_sha,
+            &completion.summary,
+        )
+        .await?;
+    // The completed callback is durable before mail is sent; normal retries
+    // observe the persisted PR and never open a second pull request.
+    deliver_confirmation_email(store, run_id, &context, &pr.html_url).await?;
+    Ok(Json(
+        json!({"runId":run_id,"status":"needs-human","prNumber":pr.number,"prUrl":pr.html_url,"reused":false}),
+    ))
+}
+
+async fn deliver_confirmation_email(
+    store: &ProjectStore,
+    run_id: uuid::Uuid,
+    context: &crate::persistence::CompletionContext,
+    pr_url: &str,
+) -> Result<()> {
+    if context.email_delivery_state == "sent" {
+        store.finish_completion_processing(run_id).await?;
+        return Ok(());
+    }
+    if !store.claim_confirmation_email(run_id).await? {
+        store.finish_completion_processing(run_id).await?;
+        return Err(Error::Config(
+            "confirmation email delivery is unresolved; automatic retry is disabled to prevent duplicate mail"
+                .to_string(),
+        ));
+    }
+    let delivery = EmailSender::from_env()?
+        .send_merge_request(
+            &context.owner_email,
+            &context.project_name,
+            &context.loop_name,
+            pr_url,
+        )
+        .await;
+    match delivery {
+        Ok(()) => store.mark_confirmation_email_sent(run_id).await,
+        Err(error) => {
+            if matches!(&error, Error::EmailRejected(_)) {
+                store.release_confirmation_email_claim(run_id).await?;
+            } else {
+                store.mark_confirmation_email_unknown(run_id).await?;
+            }
+            store.finish_completion_processing(run_id).await?;
+            Err(error)
+        }
+    }
+}
+
+async fn record_merge_confirmation(
+    Path(run_id): Path<uuid::Uuid>,
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+    Json(request): Json<MergeConfirmationRequest>,
+) -> Result<Json<Value>> {
+    if request.decision != "approve" && request.decision != "reject" {
+        return Err(Error::Config(
+            "decision must be approve or reject".to_string(),
+        ));
+    }
+    let store = state
+        .projects
+        .as_ref()
+        .ok_or_else(|| Error::Internal(anyhow::anyhow!("project persistence is unavailable")))?;
+    store
+        .record_merge_confirmation(authenticated.user.id, run_id, &request.decision)
+        .await?;
+    Ok(Json(
+        json!({"runId":run_id,"confirmationState": if request.decision == "approve" {"approved"} else {"rejected"}, "mergePerformed":false}),
+    ))
+}
+
+type HmacSha256 = Hmac<Sha256>;
+fn verify_executor_signature(headers: &HeaderMap, body: &[u8]) -> Result<()> {
+    let timestamp = headers
+        .get("x-looptask-timestamp")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| Error::Unauthorized("missing executor timestamp".to_string()))?;
+    let signature = headers
+        .get("x-looptask-signature")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| Error::Unauthorized("missing executor signature".to_string()))?;
+    let secret = env::var("LOOPTASK_EXECUTOR_SECRET")
+        .map_err(|_| Error::Config("LOOPTASK_EXECUTOR_SECRET is required".to_string()))?;
+    if secret.len() < 32 {
+        return Err(Error::Config(
+            "LOOPTASK_EXECUTOR_SECRET must be at least 32 bytes".to_string(),
+        ));
+    }
+    if secret.len() < 32 {
+        return Err(Error::Config(
+            "LOOPTASK_EXECUTOR_SECRET must contain at least 32 bytes".to_string(),
+        ));
+    }
+    verify_executor_signature_values(timestamp, signature, body, &secret, Utc::now().timestamp())
+}
+
+fn verify_executor_signature_values(
+    timestamp: &str,
+    signature: &str,
+    body: &[u8],
+    secret: &str,
+    now: i64,
+) -> Result<()> {
+    let timestamp_value: i64 = timestamp
+        .parse()
+        .map_err(|_| Error::Unauthorized("invalid executor timestamp".to_string()))?;
+    if timestamp_value < now.saturating_sub(300) || timestamp_value > now.saturating_add(300) {
+        return Err(Error::Unauthorized(
+            "executor timestamp is outside the five minute window".to_string(),
+        ));
+    }
+    let supplied = hex::decode(signature)
+        .map_err(|_| Error::Unauthorized("invalid executor signature".to_string()))?;
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key");
+    mac.update(timestamp.as_bytes());
+    mac.update(b".");
+    mac.update(body);
+    mac.verify_slice(&supplied)
+        .map_err(|_| Error::Unauthorized("invalid executor signature".to_string()))
+}
+
+fn public_completion_url(run_id: uuid::Uuid) -> Result<String> {
+    let origin = env::var("LOOPTASK_PUBLIC_ORIGIN").map_err(|_| {
+        Error::Config("LOOPTASK_PUBLIC_ORIGIN is required for executor callbacks".to_string())
+    })?;
+    public_completion_url_from_origin(&origin, run_id)
+}
+
+fn public_completion_url_from_origin(origin: &str, run_id: uuid::Uuid) -> Result<String> {
+    let mut url = reqwest::Url::parse(origin)
+        .map_err(|_| Error::Config("LOOPTASK_PUBLIC_ORIGIN must be an absolute URL".to_string()))?;
+    let host = url.host_str().unwrap_or_default();
+    let local_debug =
+        cfg!(debug_assertions) && (host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1");
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/"
+        || (url.scheme() != "https" && !(url.scheme() == "http" && local_debug))
+    {
+        return Err(Error::Config("LOOPTASK_PUBLIC_ORIGIN must be an HTTPS origin without path, credentials, query, or fragment".to_string()));
+    }
+    url.set_path(&format!("/api/v1/runs/{run_id}/completion"));
+    Ok(url.to_string())
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::{public_completion_url_from_origin, verify_executor_signature_values};
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    #[test]
+    fn accepts_only_fresh_exact_body_hmac() {
+        let timestamp = "1000";
+        let body = br#"{"callbackId":"one"}"#;
+        let mut mac = Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
+        mac.update(b"1000.");
+        mac.update(body);
+        let signature = hex::encode(mac.finalize().into_bytes());
+        assert!(
+            verify_executor_signature_values(timestamp, &signature, body, "secret", 1001).is_ok()
+        );
+        assert!(
+            verify_executor_signature_values(
+                timestamp,
+                &signature,
+                br#"{"callbackId":"two"}"#,
+                "secret",
+                1001
+            )
+            .is_err()
+        );
+        assert!(
+            verify_executor_signature_values(timestamp, &signature, body, "secret", 1301).is_err()
+        );
+    }
+
+    #[test]
+    fn callback_origin_must_be_absolute_and_safe() {
+        let url =
+            public_completion_url_from_origin("https://control.example.com", uuid::Uuid::nil())
+                .unwrap();
+        assert_eq!(
+            url,
+            "https://control.example.com/api/v1/runs/00000000-0000-0000-0000-000000000000/completion"
+        );
+        assert!(
+            public_completion_url_from_origin(
+                "https://control.example.com/not-an-origin",
+                uuid::Uuid::nil()
+            )
+            .is_err()
+        );
+    }
+}
+
+fn validate_completion(value: &ExecutorCompletion) -> Result<()> {
+    let id = |v: &str| {
+        !v.is_empty()
+            && v.len() <= 200
+            && v.bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.' | b':'))
+    };
+    if !id(&value.callback_id) || !id(&value.dispatch_id) {
+        return Err(Error::Config(
+            "invalid callbackId or dispatchId".to_string(),
+        ));
+    }
+    if !crate::github::valid_branch(&value.head_branch) {
+        return Err(Error::Config("invalid headBranch".to_string()));
+    }
+    if value.head_sha.len() != 40 && value.head_sha.len() != 64
+        || !value.head_sha.bytes().all(|c| c.is_ascii_hexdigit())
+    {
+        return Err(Error::Config(
+            "headSha must be a 40 or 64 character hexadecimal SHA".to_string(),
+        ));
+    }
+    if value.summary.len() > 10_000 {
+        return Err(Error::Config("summary is too long".to_string()));
+    }
+    Ok(())
 }
 
 fn session_cookie(headers: &HeaderMap) -> Option<String> {
@@ -489,6 +831,10 @@ async fn dispatch_loop(
             }));
         }
     }
+    let completion_callback_url = match &prepared_run {
+        Some(run) => Some(public_completion_url(run.id)?),
+        None => None,
+    };
     let event = celld::InboxEvent {
         id: None,
         source: "looptask-dispatch".to_string(),
@@ -499,6 +845,18 @@ async fn dispatch_loop(
             "mode": loop_def.mode,
             "repository": request.project.repository,
             "defaultBranch": request.project.default_branch,
+            "runId": prepared_run.as_ref().map(|run| run.id),
+            "completionCallback": completion_callback_url.map(|url| json!({
+                "url": url,
+                "method": "POST",
+                "authentication": {
+                    "algorithm": "HMAC-SHA256",
+                    "timestampHeader": "x-looptask-timestamp",
+                    "signatureHeader": "x-looptask-signature",
+                    "signedPayload": "timestamp + '.' + exact raw JSON request body",
+                    "timestampWindowSeconds": 300
+                }
+            })),
             "steps": loop_def.steps,
             "verifiers": loop_def.verifiers,
             "safety": loop_def.safety,

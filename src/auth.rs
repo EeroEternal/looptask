@@ -657,6 +657,40 @@ impl EmailSender {
     }
 
     async fn send_code(&self, recipient: &str, code: &str) -> Result<()> {
+        self.send_message(
+            recipient,
+            "looptask 验证码",
+            &format!("你的 looptask 验证码是 {code}，10 分钟内有效。"),
+            &format!("<p>你的 looptask 验证码是：</p><h1>{code}</h1><p>验证码 10 分钟内有效。</p>"),
+        )
+        .await
+    }
+
+    pub async fn send_merge_request(
+        &self,
+        recipient: &str,
+        project: &str,
+        task: &str,
+        pr_url: &str,
+    ) -> Result<()> {
+        let task = escape_html(task);
+        let project = escape_html(project);
+        let url = escape_html(pr_url);
+        self.send_message(
+            recipient,
+            &format!("确认 looptask 任务的 Pull Request：{project}"),
+            &format!("任务“{task}”已完成并创建 Pull Request：{url}\n请在 looptask 中确认批准或拒绝。此确认只会被记录，不会自动合并。"),
+            &format!("<p>任务“{task}”已完成：</p><p><a href=\"{url}\">查看 Pull Request</a></p><p>请在 looptask 中确认批准或拒绝。此确认只会被记录，不会自动合并。</p>"),
+        ).await
+    }
+
+    pub async fn send_message(
+        &self,
+        recipient: &str,
+        subject: &str,
+        text: &str,
+        html: &str,
+    ) -> Result<()> {
         let endpoint = format!(
             "https://api.cloudflare.com/client/v4/accounts/{}/email/sending/send",
             self.account_id
@@ -668,24 +702,29 @@ impl EmailSender {
             .json(&serde_json::json!({
                 "to": recipient,
                 "from": self.from,
-                "subject": "looptask 验证码",
-                "text": format!("你的 looptask 验证码是 {}，10 分钟内有效。", code),
-                "html": format!("<p>你的 looptask 验证码是：</p><h1>{}</h1><p>验证码 10 分钟内有效。</p>", code),
+                "subject": subject,
+                "text": text,
+                "html": html,
             }))
             .send()
             .await
-            .map_err(|error| Error::Internal(anyhow::anyhow!("Cloudflare 邮件请求失败: {error}")))?;
+            .map_err(|error| {
+                Error::Internal(anyhow::anyhow!("Cloudflare 邮件请求失败: {error}"))
+            })?;
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         if !status.is_success() {
             let error_message = cloudflare_error_message(&body);
-            if error_message.contains("email.sending.error.email.invalid") {
-                return Err(Error::Config(
-                    "Cloudflare 拒绝了邮件地址或邮件内容，请确认 LOOPTASK_EMAIL_FROM 是 Cloudflare Email Sending 已验证域名上的地址（例如 noreply@looptask.io），并重新发布服务".to_string(),
-                ));
+            if status.is_client_error() && status.as_u16() != 429 {
+                let message = if error_message.contains("email.sending.error.email.invalid") {
+                    "Cloudflare 拒绝了邮件地址或邮件内容，请确认 LOOPTASK_EMAIL_FROM 是 Cloudflare Email Sending 已验证域名上的地址（例如 noreply@looptask.io），并重新发布服务".to_string()
+                } else {
+                    format!("Cloudflare 明确拒绝邮件请求（{status}）：{error_message}")
+                };
+                return Err(Error::EmailRejected(message));
             }
-            return Err(Error::Config(format!(
-                "Cloudflare 邮件发送失败（{status}）：{error_message}"
+            return Err(Error::Internal(anyhow::anyhow!(
+                "Cloudflare 邮件投递结果未知（{status}）：{error_message}"
             )));
         }
         let payload: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
@@ -699,6 +738,14 @@ impl EmailSender {
         }
         Ok(())
     }
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn cloudflare_error_message(body: &str) -> String {

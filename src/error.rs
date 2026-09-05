@@ -25,6 +25,9 @@ pub enum Error {
     #[error("celld request failed: {0}")]
     Celld(String),
 
+    #[error("email provider rejected request: {0}")]
+    EmailRejected(String),
+
     #[error("Internal error: {0}")]
     Internal(#[from] anyhow::Error),
 }
@@ -37,6 +40,10 @@ impl IntoResponse for Error {
             Error::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message.clone()),
             Error::Celld(message) => {
                 error!(error = %message, "celld request failed");
+                (StatusCode::BAD_GATEWAY, message.clone())
+            }
+            Error::EmailRejected(message) => {
+                error!(error = %message, "email provider rejected request");
                 (StatusCode::BAD_GATEWAY, message.clone())
             }
             Error::Database(error) => {

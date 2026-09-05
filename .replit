@@ -42,3 +42,9 @@ externalPort = 3000
 deploymentTarget = "autoscale"
 run = ["env", "LOOPTASK_SKIP_MIGRATIONS=true", "./target/release/looptask"]
 build = ["bash", "scripts/build.sh"]
+
+[userenv]
+
+[userenv.shared]
+LOOPTASK_GITHUB_ALLOWED_REPOSITORIES = "EeroEternal/looptask"
+LOOPTASK_PUBLIC_ORIGIN = "https://looptask.io"

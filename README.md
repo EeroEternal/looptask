@@ -75,8 +75,11 @@ The local celld runtime persists Durable Object state under `celld/.celld/dev`.
 - `GET /api/v1/projects`
 - `POST /api/v1/projects`
 - `GET /api/v1/projects/{projectId}`
+- `GET /api/v1/github/repositories`
 - `GET /api/v1/runs`
 - `GET /api/v1/runs/{runId}/events`
+- `POST /api/v1/runs/{runId}/completion` (executor HMAC callback; no session cookie)
+- `POST /api/v1/runs/{runId}/merge-confirmation` (owner session required)
 - `GET /api/v1/loop-templates`
 - `POST /api/v1/loops/validate`
 - `POST /api/v1/runtime/celld`
@@ -119,6 +122,13 @@ in the runtime environment (never in the dashboard or source code):
 - `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_API_TOKEN` with Cloudflare Email Sending permission
 - `LOOPTASK_EMAIL_FROM` with a verified sender address
+- `GITHUB_TOKEN`, a server-side GitHub token with permission to open pull requests
+- `LOOPTASK_GITHUB_ALLOWED_REPOSITORIES`, a required comma-separated allowlist
+  of exact `owner/repo` repositories that the shared GitHub token may access
+- `LOOPTASK_EXECUTOR_SECRET`, a high-entropy (at least 32-byte) secret shared
+  only with the trusted executor
+- `LOOPTASK_PUBLIC_ORIGIN`, the absolute HTTPS public API origin used in
+  executor callback URLs (debug builds may use loopback HTTP)
 - `LOOPTASK_CELLD_ALLOWED_ORIGINS`, a comma-separated allowlist of exact
   trusted celld origins such as `https://looptask-celld.example.workers.dev`
 
@@ -133,6 +143,40 @@ Development starts apply the checked-in SQLx migrations automatically. The
 published service skips runtime migration execution because Replit Publish
 synchronizes the production database schema separately; this avoids replaying
 development migration DDL against the production database.
+
+### Executor completion callback and PR confirmation
+
+After dispatch, the celld inbox event contains `runId` and
+`completionCallback` protocol metadata. The trusted executor calls
+`POST /api/v1/runs/{runId}/completion` with JSON fields `callbackId`,
+`dispatchId`, `success`, `headBranch`, `headSha`, and `summary`. It must supply
+`x-looptask-timestamp` (Unix seconds) and `x-looptask-signature` (hex
+HMAC-SHA256). The signed bytes are the exact raw JSON request body prefixed by
+the timestamp and a period: `timestamp + "." + body`. Callbacks outside a
+five-minute window, malformed signatures, or dispatch IDs not recorded for
+that run are rejected.
+
+`completionCallback.url` is built from `LOOPTASK_PUBLIC_ORIGIN`; it is never a
+relative URL. GitHub automation only accepts an exact repository entry from
+`LOOPTASK_GITHUB_ALLOWED_REPOSITORIES`, even when `GITHUB_TOKEN` can access
+other repositories.
+
+### GitHub repository binding
+
+The dashboard's **Bind GitHub repository** action calls the authenticated
+`GET /api/v1/github/repositories` endpoint. The server uses `GITHUB_TOKEN`
+(a GitHub PAT or equivalent server-side credential) to fetch metadata for each
+exact allowlisted repository and returns only repositories GitHub confirms are
+accessible. The token is never returned to the browser. Only repositories whose
+GitHub `permissions.push` value is true can be bound; binding immediately saves
+the project with GitHub's reported URL and default branch. Arbitrary repository
+URLs are intentionally not supported by this flow.
+
+For a successful callback, the service derives repository, default branch,
+task goal, and owner from its database, opens or reuses an open PR, then emails
+the owner. A callback ID is idempotent. The authenticated owner can POST
+`{"decision":"approve"}` or `{"decision":"reject"}` to the merge-confirmation
+endpoint. This stores the decision only; looptask does **not** merge the PR.
 
 `/health`, `/api/v1/ping`, and the authentication endpoints are public. Loop
 template, planning, validation, dispatch, and celld proxy endpoints require a

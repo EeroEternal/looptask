@@ -444,6 +444,11 @@ input:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3p
 .config-line:last-child { border-bottom:0; padding-bottom:0; }
 .config-line span { color:var(--ink-faint); }
 .config-line strong { max-width:185px; overflow:hidden; color:var(--ink-dim); text-align:right; text-overflow:ellipsis; white-space:nowrap; font-weight:650; }
+.config-line small { display:block; margin-top:4px; color:var(--ink-faint); font-size:10px; }
+.config-line button, .repository-binding button { border:1px solid var(--border); border-radius:6px; background:var(--card); color:var(--green); cursor:pointer; font:inherit; padding:6px 9px; }
+.config-line button:disabled { cursor:not-allowed; color:var(--ink-faint); }
+.repository-binding { display:flex; gap:8px; }
+.repository-binding input { min-width:0; flex:1; }
 .runs-card { margin-top:22px; box-shadow:none; }
 .run-list { padding:7px 14px 13px; }
 .run-item { display:flex; align-items:center; gap:11px; width:100%; padding:13px 11px; border:0; border-bottom:1px solid var(--border); background:transparent; color:var(--foreground); text-align:left; }
