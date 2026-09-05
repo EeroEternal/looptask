@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{net::IpAddr, time::Duration};
 
 use chrono::{DateTime, Utc};
 use reqwest::Client;
@@ -203,14 +203,14 @@ impl CelldClient {
     }
 
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
+        let base_url = base_url.into();
+        validate_base_url(&base_url)?;
         let http = Client::builder()
             .timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| Error::Celld(format!("failed to build celld HTTP client: {error}")))?;
-        Ok(Self {
-            http,
-            base_url: base_url.into(),
-        })
+        Ok(Self { http, base_url })
     }
 
     fn cell_url(&self, agent_cell_id: &str, path_segments: &[&str]) -> Result<reqwest::Url> {
@@ -290,6 +290,97 @@ impl CelldClient {
     }
 }
 
+fn validate_base_url(base_url: &str) -> Result<()> {
+    let allowed_origins = std::env::var("LOOPTASK_CELLD_ALLOWED_ORIGINS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|origin| !origin.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    validate_base_url_with_allowed_origins(base_url, &allowed_origins)
+}
+
+fn validate_base_url_with_allowed_origins(
+    base_url: &str,
+    allowed_origins: &[String],
+) -> Result<()> {
+    let url = reqwest::Url::parse(base_url)
+        .map_err(|error| Error::Config(format!("invalid celld base url: {error}")))?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(Error::Config(
+            "celld base url must not contain credentials".to_string(),
+        ));
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| Error::Config("celld base url must include a host".to_string()))?;
+    if url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
+        return Err(Error::Config(
+            "celld base url must be an origin without a path, query, or fragment".to_string(),
+        ));
+    }
+    let local_debug_host = cfg!(debug_assertions)
+        && (host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<IpAddr>()
+                .map(|address| address.is_loopback())
+                .unwrap_or(false));
+    if url.scheme() != "https" && !(url.scheme() == "http" && local_debug_host) {
+        return Err(Error::Config(
+            "celld base url must use https outside local development".to_string(),
+        ));
+    }
+    if local_debug_host {
+        return Ok(());
+    }
+    if host.eq_ignore_ascii_case("localhost")
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+        || host.eq_ignore_ascii_case("metadata.google.internal")
+    {
+        return Err(Error::Config(
+            "celld base url must not target a local or internal hostname".to_string(),
+        ));
+    }
+    if let Ok(address) = host.parse::<IpAddr>() {
+        if is_non_public_address(address) {
+            return Err(Error::Config(
+                "celld base url must not target a private or special-use address".to_string(),
+            ));
+        }
+    }
+    let origin = url.origin().ascii_serialization();
+    if !allowed_origins.iter().any(|allowed| allowed == &origin) {
+        return Err(Error::Config(format!(
+            "celld origin {origin} is not listed in LOOPTASK_CELLD_ALLOWED_ORIGINS"
+        )));
+    }
+    Ok(())
+}
+
+fn is_non_public_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            address.is_private()
+                || address.is_loopback()
+                || address.is_link_local()
+                || address.is_broadcast()
+                || address.is_documentation()
+                || address.is_unspecified()
+                || address.is_multicast()
+        }
+        IpAddr::V6(address) => {
+            address.is_loopback()
+                || address.is_unspecified()
+                || address.is_unique_local()
+                || address.is_unicast_link_local()
+                || address.is_multicast()
+        }
+    }
+}
+
 fn celld_request_error(error: reqwest::Error) -> Error {
     Error::Celld(format!("failed to reach celld: {error}"))
 }
@@ -306,4 +397,30 @@ async fn read_celld_json<T: serde::de::DeserializeOwned>(response: reqwest::Resp
         .json::<T>()
         .await
         .map_err(|error| Error::Celld(format!("invalid celld response body: {error}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_base_url_with_allowed_origins;
+
+    #[test]
+    fn rejects_unlisted_public_celld_origin() {
+        let result = validate_base_url_with_allowed_origins("https://celld.example.com", &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepts_exactly_allowlisted_celld_origin() {
+        let allowed = vec!["https://celld.example.com".to_string()];
+        let result = validate_base_url_with_allowed_origins("https://celld.example.com", &allowed);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn rejects_allowlisted_origin_with_untrusted_path() {
+        let allowed = vec!["https://celld.example.com".to_string()];
+        let result =
+            validate_base_url_with_allowed_origins("https://celld.example.com/internal", &allowed);
+        assert!(result.is_err());
+    }
 }

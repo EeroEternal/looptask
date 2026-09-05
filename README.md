@@ -119,6 +119,8 @@ in the runtime environment (never in the dashboard or source code):
 - `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_API_TOKEN` with Cloudflare Email Sending permission
 - `LOOPTASK_EMAIL_FROM` with a verified sender address
+- `LOOPTASK_CELLD_ALLOWED_ORIGINS`, a comma-separated allowlist of exact
+  trusted celld origins such as `https://looptask-celld.example.workers.dev`
 
 The Rust service sends `POST
 /accounts/{account_id}/email/sending/send` through Cloudflare's Email Service
@@ -135,7 +137,10 @@ development migration DDL against the production database.
 `/health`, `/api/v1/ping`, and the authentication endpoints are public. Loop
 template, planning, validation, dispatch, and celld proxy endpoints require a
 valid session cookie. The production binary fails to start when `DATABASE_URL`
-is missing rather than silently falling back to process memory.
+is missing rather than silently falling back to process memory. Production
+celld requests are accepted only for origins listed in
+`LOOPTASK_CELLD_ALLOWED_ORIGINS`; local debug builds additionally permit
+loopback HTTP origins for development and tests.
 
 ### Loop Task abstraction
 

@@ -497,6 +497,11 @@ async fn dispatch_loop(
             "kind": loop_def.kind,
             "goal": loop_def.goal,
             "mode": loop_def.mode,
+            "repository": request.project.repository,
+            "defaultBranch": request.project.default_branch,
+            "steps": loop_def.steps,
+            "verifiers": loop_def.verifiers,
+            "safety": loop_def.safety,
             "resident": match &loop_def.trigger {
                 crate::models::Trigger::Resident { interval_seconds } => {
                     Some(json!({ "intervalSeconds": interval_seconds }))
