@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::models::{
-    AgentProfile, DecisionRule, LoopBudget, LoopDefinition, LoopKind, LoopMode, LoopSafety,
-    LoopStep, StatePolicy, StopRules, Trigger, Verifier,
+    AgentProfile, DecisionRule, LoopBudget, LoopDefinition, LoopKind, LoopLifetime, LoopMode,
+    LoopSafety, LoopStep, StatePolicy, StopRules, Trigger, Verifier,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -100,6 +100,7 @@ fn docs_lifecycle_patrol() -> LoopTemplate {
         summary: "对文档仓库进行隔离、可验证、可回收的生命周期巡检".to_string(),
         mode: LoopMode::HumanGated,
         trigger: Trigger::Manual,
+        lifetime: LoopLifetime::default(),
         agent: AgentProfile {
             cell_id_template: "{project}/{loop}/{agent}".to_string(),
             sandbox_required: true,

@@ -1,5 +1,6 @@
 use looptask::{
     ProjectConfig,
+    models::{LifetimeKind, Trigger},
     celld::{ArtifactPlacement, agent_cell_id, artifact_placement, foundation},
     loop_catalog,
 };
@@ -9,8 +10,16 @@ fn example_config_loads_and_validates() {
     let config = ProjectConfig::from_path("examples/looptask.json").unwrap();
 
     assert_eq!(config.project.name, "looptask");
-    assert_eq!(config.project.loops.len(), 3);
+    assert_eq!(config.project.loops.len(), 4);
     assert_eq!(config.project.celld.durable_object_class, "AgentCell");
+    assert!(matches!(
+        &config.project.loops[0].trigger,
+        Trigger::Group { listeners } if listeners.len() == 2
+    ));
+    assert_eq!(
+        config.project.loops[1].lifetime.kind,
+        LifetimeKind::Until
+    );
 }
 
 #[test]

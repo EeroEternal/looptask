@@ -29,9 +29,23 @@
         "goal": "Keep README and project documentation aligned with source changes.",
         "mode": "safe-pr",
         "trigger": {
-          "type": "cron",
-          "schedule": "0 9 * * 1"
+          "type": "group",
+          "listeners": [
+            {
+              "type": "github",
+              "events": ["pr-pushed", "ci-failed"],
+              "paths": ["src/**", "docs/**", "README.md"],
+              "branches": ["main"]
+            },
+            {
+              "type": "cron",
+              "schedule": "0 9 * * 1-5",
+              "timezone": "Asia/Shanghai",
+              "quietHours": { "start": "22:00", "end": "08:00" }
+            }
+          ]
         },
+        "lifetime": { "kind": "standing" },
         "agent": {
           "cellIdTemplate": "{project}/{loop}/{agent}",
           "sandboxRequired": false,
@@ -60,6 +74,44 @@
         ]
       },
       {
+        "name": "ci-red-watch",
+        "kind": "ci_watch",
+        "goal": "Watch main CI failures, report evidence, and disarm after green or a short run budget.",
+        "mode": "report-only",
+        "trigger": {
+          "type": "github",
+          "events": ["ci-failed"],
+          "branches": ["main"],
+          "ciBranch": "main"
+        },
+        "lifetime": {
+          "kind": "until",
+          "until": {
+            "anyOf": [
+              { "type": "ci-passed" },
+              { "type": "maxRuns", "count": 5 },
+              { "type": "human-disable" }
+            ]
+          },
+          "onExpire": "pause-and-archive"
+        },
+        "agent": {
+          "cellIdTemplate": "{project}/{loop}/{agent}",
+          "sandboxRequired": true,
+          "allowedTools": ["read-repo", "gh"],
+          "humanGate": false
+        },
+        "verifiers": [],
+        "stopRules": {
+          "maxSteps": 6,
+          "maxConsecutiveFailures": 2,
+          "largeFileLines": 500
+        },
+        "escalationRules": [
+          "Escalate when the failure is outside the loop allow-list or needs product judgment."
+        ]
+      },
+      {
         "name": "external-data-sync",
         "kind": "external_data_sync",
         "goal": "Check configured external data sources before generated cache updates.",
@@ -67,6 +119,7 @@
         "trigger": {
           "type": "manual"
         },
+        "lifetime": { "kind": "standing" },
         "agent": {
           "cellIdTemplate": "{project}/{loop}/{agent}",
           "sandboxRequired": true,
@@ -85,8 +138,10 @@
         "mode": "report-only",
         "trigger": {
           "type": "cron",
-          "schedule": "0 9 1 * *"
+          "schedule": "0 9 1 * *",
+          "timezone": "Asia/Shanghai"
         },
+        "lifetime": { "kind": "standing" },
         "agent": {
           "cellIdTemplate": "{project}/{loop}/{agent}",
           "sandboxRequired": true,

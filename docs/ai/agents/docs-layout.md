@@ -8,6 +8,9 @@ Describes the structure and lifecycle of the `docs/` tree.
 - `docs/architecture/module-boundaries.md`: crate/module dependency rules.
 - `docs/ai/agents/`: engineering guidelines, commit standards, and agent
   governance.
+- `docs/design/loop-triggers-and-command-center.md`: design contract for
+  event triggers, loop lifetime, and Command Center APIs (not fully
+  implemented until follow-up slices land).
 
 ## Document Lifecycle Discipline
 
