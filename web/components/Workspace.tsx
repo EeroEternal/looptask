@@ -249,7 +249,7 @@ export function Workspace({ user, onLogout }: { user: User; onLogout: () => void
         <div className="header-actions"><span className="header-status"><i />{notice}</span><span className="user-name">{displayName}</span><button className="logout-link" onClick={onLogout} type="button">退出</button></div>
       </header>
       <main className="workspace-main">
-        <div className="intro-row"><div><p className="overline">工作区 / 新任务</p><h1>让一个任务跑起来。</h1><p className="intro-copy">连接仓库，描述目标，写下完成的证据，然后发送到 Agent cell。</p></div><div className="github-note"><span className="github-symbol">GH</span><div><strong>{repository ? "GitHub 仓库已连接" : "绑定允许的 GitHub 仓库"}</strong><small>{repository ? `${repository} · ${branch}` : "执行器签名回报完成后，系统才会创建 PR 并请求你的确认。"}</small></div><button onClick={() => void openGitHubBinding()} type="button">{repository ? "更换" : "绑定"}</button></div></div>
+        <div className="intro-row"><div><p className="overline">工作区 / 新任务</p><h1>让一个任务跑起来。</h1></div><div className="github-note"><span className="github-symbol">GH</span><div><strong>{repository ? "GitHub 仓库已连接" : "绑定允许的 GitHub 仓库"}</strong><small>{repository ? `${repository} · ${branch}` : "执行器签名回报完成后，系统才会创建 PR 并请求你的确认。"}</small></div><button onClick={() => void openGitHubBinding()} type="button">{repository ? "更换" : "绑定"}</button></div></div>
         {loadError && <div className="error-state"><strong>工作区暂时无法加载</strong><span>{loadError}</span><button onClick={() => void loadWorkspace()} type="button">重试</button></div>}
 
         <section className="task-layout">
