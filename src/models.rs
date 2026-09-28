@@ -70,6 +70,9 @@ pub struct LoopDefinition {
     pub mode: LoopMode,
     #[serde(default)]
     pub trigger: Trigger,
+    /// Standing vs finite lifetime. Omitted configs deserialize as standing.
+    #[serde(default)]
+    pub lifetime: LoopLifetime,
     #[serde(default)]
     pub agent: AgentProfile,
     #[serde(default)]
@@ -161,6 +164,8 @@ pub enum LoopKind {
     DocsSync,
     ExternalDataSync,
     ArchitectureScan,
+    /// Finite watch for red CI / failing checks (design slice; scheduler TBD).
+    CiWatch,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -172,18 +177,123 @@ pub enum LoopMode {
     HumanGated,
 }
 
+/// Quiet window for cron triggers (local wall clock in `timezone` if set).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QuietHours {
+    pub start: String,
+    pub end: String,
+}
+
+/// How long a loop stays armed. Runtime enforcement is a follow-up slice;
+/// these fields are the durable config contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopLifetime {
+    #[serde(default)]
+    pub kind: LifetimeKind,
+    #[serde(default)]
+    pub until: Option<LifetimeUntil>,
+    #[serde(default = "default_on_expire")]
+    pub on_expire: LifetimeExpireAction,
+}
+
+impl Default for LoopLifetime {
+    fn default() -> Self {
+        Self {
+            kind: LifetimeKind::Standing,
+            until: None,
+            on_expire: default_on_expire(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum LifetimeKind {
+    #[default]
+    Standing,
+    Until,
+    MaxRuns,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LifetimeUntil {
+    #[serde(default)]
+    pub any_of: Vec<LifetimeCondition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum LifetimeCondition {
+    #[serde(rename = "pr-merged")]
+    PrMerged,
+    #[serde(rename = "pr-closed")]
+    PrClosed,
+    #[serde(rename = "ci-passed")]
+    CiPassed,
+    #[serde(rename = "human-disable")]
+    HumanDisable,
+    #[serde(rename = "deadline")]
+    Deadline { at: String },
+    #[serde(rename = "maxRuns")]
+    MaxRuns { count: u32 },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LifetimeExpireAction {
+    PauseAndArchive,
+    Delete,
+    KeepArmed,
+}
+
+fn default_on_expire() -> LifetimeExpireAction {
+    LifetimeExpireAction::PauseAndArchive
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum Trigger {
     Cron {
         schedule: String,
+        /// Optional IANA timezone; omit to follow operator/project default.
+        #[serde(default)]
+        timezone: Option<String>,
+        #[serde(default)]
+        quiet_hours: Option<QuietHours>,
     },
+    /// High-frequency polling. Prefer event triggers in production; treat as
+    /// debug-oriented unless interval is coarse.
     Resident {
         #[serde(default = "default_resident_interval_seconds")]
         interval_seconds: u64,
     },
+    /// Legacy single-event GitHub trigger (`type: "gitHubEvent"`).
     GitHubEvent {
         event: String,
+    },
+    /// Filtered GitHub / CI trigger (`type: "github"`).
+    #[serde(rename = "github")]
+    GitHub {
+        #[serde(default)]
+        events: Vec<String>,
+        #[serde(default)]
+        paths: Vec<String>,
+        #[serde(default)]
+        branches: Vec<String>,
+        #[serde(default)]
+        pr_scoped: bool,
+        #[serde(default)]
+        ci_branch: Option<String>,
+        #[serde(default)]
+        user_allowlist: Vec<String>,
+    },
+    /// Fire when any nested listener matches (`type: "group"`).
+    #[serde(rename = "group")]
+    Group {
+        listeners: Vec<Trigger>,
     },
     #[default]
     Manual,
@@ -283,6 +393,100 @@ pub enum RunStatus {
     Passed,
     Failed,
     NeedsHuman,
+    /// Operator or policy pause; may resume.
+    Paused,
+    /// Heartbeat / progress stalled; needs steer or cancel.
+    Stuck,
+    /// Explicitly aborted.
+    Cancelled,
+}
+
+/// Suggested `loop_events.event_type` values for Command Center (design).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LoopEventType {
+    Progress,
+    NeedsDecision,
+    Steered,
+    AuthFailed,
+    BudgetHit,
+    VerifierFailed,
+    StuckDetected,
+    Queued,
+    Dispatched,
+    Completed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathAllowlistDelta {
+    #[serde(default)]
+    pub add: Vec<String>,
+    #[serde(default)]
+    pub remove: Vec<String>,
+}
+
+/// Mid-flight correction injected into the agent cell inbox. Expanding
+/// `allowedPathsDelta.add` must be rejected by the control plane; only shrink
+/// is allowed without a human charter PR.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteerRunRequest {
+    pub intent: String,
+    #[serde(default)]
+    pub budget_override: Option<LoopBudget>,
+    #[serde(default)]
+    pub allowed_paths_delta: Option<PathAllowlistDelta>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunDecision {
+    Approve,
+    Reject,
+    Redirect,
+    Escalate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunDecisionRequest {
+    pub decision: RunDecision,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub redirect_intent: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DecisionCardKind {
+    MergeConfirm,
+    WidenAllowlist,
+    AmbiguousFix,
+    AuthReconnect,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionCard {
+    pub card_id: String,
+    pub kind: DecisionCardKind,
+    pub title: String,
+    pub options: Vec<RunDecision>,
+    #[serde(default)]
+    pub blocks_run: bool,
+}
+
+/// Optional lesson candidate emitted on successful runs; promotion into loop
+/// policy requires a human (see skill promote-lesson). Not auto-applied.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LessonCandidate {
+    pub signal: String,
+    pub suggested_policy: String,
+    #[serde(default = "default_true")]
+    pub needs_human_promote: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -346,4 +550,56 @@ fn default_protected_branches() -> Vec<String> {
 
 fn default_cleanup_policy() -> String {
     "remove-worktree; keep-branch-only-when-pr-open".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_github_event_trigger_still_deserializes() {
+        let trigger: Trigger = serde_json::from_str(
+            r#"{"type":"gitHubEvent","event":"push"}"#,
+        )
+        .unwrap();
+        assert!(matches!(trigger, Trigger::GitHubEvent { event } if event == "push"));
+    }
+
+    #[test]
+    fn github_and_group_triggers_deserialize() {
+        let trigger: Trigger = serde_json::from_str(
+            r#"{
+              "type":"group",
+              "listeners":[
+                {
+                  "type":"github",
+                  "events":["pr-pushed","ci-failed"],
+                  "paths":["docs/**"],
+                  "branches":["main"]
+                },
+                {"type":"cron","schedule":"0 9 * * 1-5","timezone":"Asia/Shanghai"}
+              ]
+            }"#,
+        )
+        .unwrap();
+        match trigger {
+            Trigger::Group { listeners } => {
+                assert_eq!(listeners.len(), 2);
+                assert!(matches!(listeners[0], Trigger::GitHub { .. }));
+                assert!(matches!(listeners[1], Trigger::Cron { .. }));
+            }
+            other => panic!("unexpected trigger: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lifetime_defaults_to_standing() {
+        let lifetime: LoopLifetime = serde_json::from_str("{}").unwrap();
+        assert_eq!(lifetime.kind, LifetimeKind::Standing);
+        assert_eq!(lifetime.on_expire, LifetimeExpireAction::PauseAndArchive);
+    }
 }

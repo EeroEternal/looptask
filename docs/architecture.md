@@ -42,3 +42,8 @@ sandbox (untrusted execution). This document only covers the Rust service.
 Custom business adaptations (auth decoration, vendor protocol adaptors, data
 masking) must be implemented as modular middleware, never hardcoded into
 `src/server.rs`'s core routing.
+
+## Related design contracts
+
+- Trigger / lifetime / Command Center (design only until scheduled slices land):
+  [`docs/design/loop-triggers-and-command-center.md`](design/loop-triggers-and-command-center.md)
