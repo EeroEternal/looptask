@@ -643,7 +643,8 @@ async function completionContext(env, runId) {
   const row = await env.DB.prepare(
     `SELECT r.id AS run_id, r.user_id, u.email AS owner_email, p.name AS project_name,
             p.repository, p.default_branch, r.loop_name,
-            COALESCE(json_extract(ld.definition_json, '$.goal'), '') AS goal, r.status, r.dispatch_id,
+            COALESCE(json_extract(ld.definition_json, '$.goal'), '') AS goal,
+            COALESCE(json_extract(ld.definition_json, '$.resultTarget'), 'pr') AS result_target, r.status, r.dispatch_id,
             r.callback_id, r.pr_number, r.pr_url, r.confirmation_email_sent_at,
             r.completion_processing, r.completion_processing_at, r.email_delivery_state
      FROM loop_runs r JOIN users u ON u.id = r.user_id
@@ -905,6 +906,28 @@ async function executorCompletion(env, request, runId) {
 
   const config = await userGithub(env, context.user_id);
   const repository = parseRepository(repositoryUrl);
+
+  if (context.result_target === "issue") {
+    // Issue mode: the result is a report — file it as a GitHub issue and the
+    // run is done. No PR, no merge confirmation.
+    const issue = await githubRequest(config, `repos/${repository.owner}/${repository.name}/issues`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: `looptask: ${context.loop_name}`,
+        body: `**Goal:** ${context.goal}\n\n${completion.summary}`,
+      }),
+    });
+    await env.DB.prepare(
+      `UPDATE loop_runs SET status = 'passed', ended_at = ?2, pr_number = ?3, pr_url = ?4,
+       head_branch = ?5, head_sha = ?6, completion_summary = ?7, completion_processing = 0 WHERE id = ?1`,
+    )
+      .bind(runId, nowIso(), issue.number, issue.html_url, completion.headBranch, completion.headSha, completion.summary)
+      .run();
+    await appendEvent(env, runId, "issue_created", { issueNumber: issue.number, issueUrl: issue.html_url });
+    await appendEvent(env, runId, "completed", { resultTarget: "issue" });
+    return json({ runId, status: "passed", issueNumber: issue.number, issueUrl: issue.html_url, reused: false });
+  }
+
   await verifyBranchSha(config, repository, completion.headBranch, completion.headSha);
   const pr = await createOrFindPr(
     config,

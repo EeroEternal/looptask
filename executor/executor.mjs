@@ -165,9 +165,10 @@ async function execute(task) {
 
     await git(workdir, ["add", "-A"]);
     const status = await git(workdir, ["status", "--porcelain"]);
-    if (!status.output.trim()) {
-      // report-only: nothing changed — hand back the default branch and the
-      // Worker records the report without opening a PR.
+    const wantBranch = (task.loop?.resultTarget || "pr") === "pr";
+    if (!status.output.trim() || !wantBranch) {
+      // report-only / issue mode: nothing to PR — hand back the default branch
+      // and the Worker records the result without opening a PR.
       return report(task, true, notes.join("\n"), task.defaultBranch, await headSha(workdir));
     }
 
