@@ -8,12 +8,12 @@ following are always violations:
 1. **Smuggled tuning**: changing defaults, thresholds, timeouts, concurrency
    limits, or rate-limit config under the guise of "remediate" / "refactor" /
    "format".
-2. **Bulk reformatting**: `cargo fmt` output must be its own commit, never
-   mixed with logic changes.
-3. **`#[allow(...)]` suppression**: silencing a Clippy warning without
+2. **Bulk reformatting**: formatter output (`prettier`) must be
+   its own commit, never mixed with logic changes.
+3. **Lint suppression**: silencing an ESLint/Clippy warning without
    explaining why.
-4. **Cross-module refactor**: fixing a bug in `server.rs` must not also
-   rename internals in `celld.rs` / `models.rs`.
+4. **Cross-module refactor**: fixing a bug in `worker/src/worker.js` must not
+   also rename helpers in `worker/src/templates.js` / `web/`.
 
 Violating commits must be split via `git reset --mixed HEAD~1`.
 
@@ -27,31 +27,30 @@ Violating commits must be split via `git reset --mixed HEAD~1`.
    changes behind a vague description.
 2. Run `git diff --stat` before stashing to confirm no in-flight dependency
    is swept away.
-3. Run `cargo check --tests` after popping (not optional).
-4. Never stash `Cargo.toml` / `Cargo.lock` / build scripts.
+3. Run `cd worker && npm test` after popping (not optional).
+4. Never stash `worker/wrangler.toml` / `worker/migrations/` or build
+   scripts.
 
 Full steps: skill [`git-stash-safe`](../../../.agents/skills/git-stash-safe/SKILL.md).
 
 ---
 
-## 3. Background tasks / daemons / `tokio::spawn`
+## 3. Background work / daemons / executor webhooks
 
-`tokio::spawn` and other background tasks (loop dispatch polling, celld
-wakeups) are high-risk constructs and must:
+Background work (executor dispatch webhooks, resident wakeups, long
+integration calls) are high-risk constructs and must:
 
-1. **Make lifetime explicit**: never spawn bare inside
-   `impl Default::default()` / `impl X::new()`. Provide an explicit
-   `start_background_xxx(&self)` entry point called from `init()` / `main()`.
-2. **Guard the Tokio runtime**: wrap spawn sites with
-   `tokio::runtime::Handle::try_current()` or only trigger them in a known
-   runtime context, to avoid panics in sync tests/CLI paths.
-3. **Time out long calls**: every async call inside a long-running task needs
-   a `tokio::time::timeout(...)` fallback so a daemon can't hang forever.
-4. **Never swallow errors**: panics / timeouts / calculation errors must be
-   logged with at least one `tracing::error!`, never a silent `continue`.
-5. **Expose observability**: shared state written by a daemon
-   (`Arc<AtomicX>` / `Arc<RwLock<X>>`) needs at least one metric or debug
-   endpoint so liveness can be observed.
+1. **Make lifetime explicit**: never start unawaited work implicitly; every
+   background request has a named entry point and a documented owner.
+2. **Respect the Worker lifetime**: use `ctx.waitUntil(...)` for work that
+   must outlive the response, never a bare floating promise.
+3. **Time out long calls**: every outbound fetch needs an
+   `AbortSignal.timeout(...)` fallback so a handler can't hang forever.
+4. **Never swallow errors**: timeouts / calculation errors must be logged
+   with at least one `console.error`, never a silent `continue`.
+5. **Expose observability**: run state written by background work needs at
+   least one queryable surface (a run event row or endpoint) so liveness can
+   be observed.
 
 ---
 
@@ -93,10 +92,10 @@ Bulk-editing source via scripts is a frequent failure mode:
 
 ## 6. Database migrations
 
-After adding `migrations/NNN_*.sql`, force a rebuild per skill
+After adding `worker/migrations/NNN_*.sql`, apply it per skill
 [`add-sql-migration`](../../../.agents/skills/add-sql-migration/SKILL.md);
-`cargo build` alone without touching the embedding source file often leaves
-new migrations out of the binary, which is easy to misdiagnose as bad SQL.
+a checked-in migration that was never `wrangler d1 migrations apply`-ed is
+never seen by the Worker, which is easy to misdiagnose as bad SQL.
 
 ---
 

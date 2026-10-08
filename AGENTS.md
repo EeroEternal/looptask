@@ -25,14 +25,14 @@ chapters into context by default**.
 | Task Signal | Required Reading |
 | --- | --- |
 | `git stash` operations | skill [`git-stash-safe`](.agents/skills/git-stash-safe/SKILL.md) |
-| Adding SQL migrations (`migrations/NNN_*.sql`) | skill [`add-sql-migration`](.agents/skills/add-sql-migration/SKILL.md) |
+| Adding D1 migrations (`worker/migrations/NNN_*.sql`) | skill [`add-sql-migration`](.agents/skills/add-sql-migration/SKILL.md) |
 | Release / tagging / production deployment | skill [`release`](.agents/skills/release/SKILL.md) |
 | Code review / PR audit / acceptance verification | skill [`review`](.agents/skills/review/SKILL.md) (independent read-only context) |
 | Autonomous agent loops / cron tasks | [`loop-charter.md`](docs/ai/agents/loop-charter.md) |
-| `tokio::spawn` / daemons / celld runtime / exit codes | [`engineering.md`](docs/ai/agents/engineering.md) |
+| Background work / executor webhooks / exit codes | [`engineering.md`](docs/ai/agents/engineering.md) |
 | Commit message conventions | [`commit-style.md`](docs/ai/agents/commit-style.md) |
-| Cross-module boundaries / server vs celld vs sandbox | [`module-boundaries.md`](docs/architecture/module-boundaries.md) |
-| Push before `git push` on `src/` or `tests/` | skill [`pre-push-local-gates`](.agents/skills/pre-push-local-gates/SKILL.md) |
+| Cross-module boundaries / Worker vs Pages vs sandbox | [`module-boundaries.md`](docs/architecture/module-boundaries.md) |
+| Push before `git push` on `worker/` or `web/` | skill [`pre-push-local-gates`](.agents/skills/pre-push-local-gates/SKILL.md) |
 
 ## Always Active (Highest Standing Constraints)
 
@@ -44,18 +44,18 @@ chapters into context by default**.
    cached field must have a store policy; every `TODO` must reference an
    issue. Docs must never cite skeleton-only features as existing.
 3. **Safe Stash**: honest stash naming; `git diff --stat` before stash;
-   `cargo check --tests` required after pop; never stash `Cargo.toml`,
-   `Cargo.lock`, or build scripts.
+   `cd worker && npm test` required after pop; never stash
+   `worker/wrangler.toml`, `worker/migrations/`, or build scripts.
 4. **Release Guardrail**: merging to `main` or creating release tags is
    strictly prohibited without explicit human approval.
-5. **Sandbox Boundary**: `celld` is the agent memory/scheduler foundation, not
-   a hostile-code sandbox; untrusted execution stays in the external sandbox
-   (see [`README.md`](README.md)).
+5. **Sandbox Boundary**: the Worker + D1 are the agent memory/control plane,
+   not a hostile-code sandbox; untrusted execution stays in the external
+   sandbox (see [`README.md`](README.md)).
 6. **Loop Safety Modes**: loop dispatch must always tag one of `report-only`,
    `safe-pr`, or `human-gated`; never bypass the declared mode.
-7. **Pre-push Local Quality Gate**: never use CI as a local sandbox; run
-   `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and
-   `cargo test --workspace` via skill
+7. **Pre-push Local Quality Gate**: never use CI as a local sandbox; run the
+   `worker/` and `executor/` tests, `npx wrangler deploy --dry-run`, and
+   `npm --prefix web run build` via skill
    [`pre-push-local-gates`](.agents/skills/pre-push-local-gates/SKILL.md)
    before pushing.
 

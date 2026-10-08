@@ -24,14 +24,15 @@ Ensure the working tree is clean and every gate passes 100%:
 ```bash
 git status
 
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test --workspace
+cd worker && npm test
+node --test executor/
+npx wrangler deploy --dry-run
+npm --prefix web run build
 ```
 
 ### Step 2: Three-point release verification
-1. **Version consistency**: confirm `Cargo.toml`'s version has been bumped
-   correctly (e.g. `v0.1.0` → `v0.2.0`).
+1. **Version consistency**: confirm the root `package.json` version has been
+   bumped correctly (e.g. `v0.1.0` → `v0.2.0`).
 2. **Changelog**: confirm `CHANGELOG.md` or the relevant release notes record
    this version's key features and breaking changes.
 3. **Secrets & build artifact scan**: confirm no private keys, `.env` files,

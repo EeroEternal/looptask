@@ -3,17 +3,9 @@
     "name": "looptask",
     "repository": "https://github.com/EeroEternal/looptask",
     "defaultBranch": "main",
-    "techStack": ["rust", "axum", "tokio", "celld", "durable-objects"],
+    "techStack": ["javascript", "cloudflare-workers", "cloudflare-d1"],
     "docs": ["README.md"],
-    "sourcePaths": ["src", "tests", "celld/src"],
-    "celld": {
-      "appDir": "celld",
-      "bucket": "looptask",
-      "publicUrl": "http://127.0.0.1:9876",
-      "internalUrl": null,
-      "durableObjectClass": "AgentCell",
-      "artifactBucketPrefix": "agents"
-    },
+    "sourcePaths": ["worker/src", "web"],
     "externalDataSources": [
       {
         "name": "example-registry",
@@ -40,8 +32,8 @@
         },
         "verifiers": [
           {
-            "name": "rust-tests",
-            "command": ["cargo", "test", "--workspace"],
+            "name": "node-tests",
+            "command": ["npm", "test"],
             "timeoutSeconds": 120
           }
         ],

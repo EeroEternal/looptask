@@ -1,37 +1,35 @@
 ---
 name: add-sql-migration
-description: Add a new SQL migration under migrations/ so sqlx embeds it and looptask actually applies it on startup. Use when creating migrations/NNN_*.sql, debugging "migration not applied", or touching sqlx::migrate!.
+description: Add a new D1 (SQLite) migration under worker/migrations/ so wrangler applies it and looptask actually sees the schema. Use when creating worker/migrations/NNN_*.sql, debugging "table/column missing", or changing D1 SQL.
 ---
 
-# Add a SQL migration (sqlx compile-time embed)
+# Add a D1 migration (wrangler d1)
 
 ## Symptom / misjudgment
-`looptask` depends on `sqlx` with the `migrate` feature but does not yet ship
-a `migrations/` directory. If you add `migrations/NNN_*.sql`, run
-`cargo build`, start the service, and the new version never appears applied,
-it looks like the SQL is wrong — the real cause is usually cargo not
-rebuilding after a **new file** under `migrations/`.
+You add `worker/migrations/NNN_*.sql`, run the Worker, and the new table or
+column is missing — it looks like the SQL is wrong, but the real cause is
+usually that the migration was never applied to the database you are
+actually hitting (local vs remote D1 are separate databases).
 
 ## Root cause
-`sqlx::migrate!("./migrations")` embeds migration files at **compile time**.
-Cargo does not treat a newly added file in that directory as a reason to
-rebuild the crate that embeds it.
+`wrangler d1 migrations apply` is a manual step per database. Local
+(`--local`, under `worker/.wrangler/`) and remote (`--remote`) states do not
+sync.
 
 ## Procedure
-1. Create `migrations/NNN_<short_snake_name>.sql` with the next unused
-   version prefix.
-2. **Force rebuild**: `touch` the source file that calls `sqlx::migrate!`
-   (or any file under `src/` that participates in the binary), then
-   `cargo build`.
-3. Start the service with a valid `DATABASE_URL`; migrations run on startup.
-4. Confirm: query `_sqlx_migrations` shows the new `version`, or logs show it
-   applied.
+1. Create `worker/migrations/NNN_<short_snake_name>.sql` with the next unused
+   version prefix. SQLite dialect only (`TEXT` ids, ISO-8601 `TEXT` timestamps).
+2. Apply: `cd worker && npx wrangler d1 migrations apply looptask --local`
+   (and `--remote` for the deployed database).
+3. Confirm: `npx wrangler d1 execute looptask --local --command "SELECT name
+   FROM sqlite_master WHERE type='table'"` (or `--remote`) shows the change.
 
 ## Editing an existing migration
-- Changing an already-applied file triggers sqlx checksum checks.
-- Do not rewrite applied migrations on shared/prod databases — add a new
-  forward migration instead.
+- Wrangler records applied migrations by file name/hash; do not rewrite
+  applied migrations on shared/prod databases — add a new forward migration
+  instead.
 
 ## Verification
-- After touch + build + start, `_sqlx_migrations` contains the new version.
-- Do not conclude "SQL bug" until this rebuild step was done.
+- After apply, the schema query shows the new table/column.
+- Do not conclude "SQL bug" until you confirmed the migration was applied to
+  the same database the Worker is bound to.

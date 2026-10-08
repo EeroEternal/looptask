@@ -6,39 +6,46 @@ flow principles for `looptask`.
 ## 1. Architecture Overview
 
 ```text
-[ Operator / CI Trigger ]
-           │
-           ▼
-[ Axum HTTP Transport Layer (src/server.rs) ]
-           │
-           ▼
-[ Domain Layer: project config, loop planning (src/config.rs, src/models.rs) ]
-           │
-           ▼
-[ celld Foundation Bridge (src/celld.rs) ] ──▶ [ celld Durable Object app (celld/) ]
+[ Operator browser ]
+        │
+        ▼
+[ Cloudflare Pages admin dashboard (web/) ]
+        │  functions/api/[[path]].js same-origin proxy
+        ▼
+[ Cloudflare Worker API (worker/src/worker.js) ]
+        │
+        ▼
+[ Cloudflare D1 (SQLite) — the only database (worker/migrations/) ]
+        │
+        ▼
+[ external executor sandbox ] ──HMAC callback──▶ [ Worker /api/v1/runs/{id}/completion ]
 ```
 
 The runtime split described in [`README.md`](../README.md) is intentional:
-Rust service (config, API, planning, verification policy), celld Durable
-Object app (agent cell state, inbox, alarms, checkpoints), and an external
-sandbox (untrusted execution). This document only covers the Rust service.
+the Worker owns the control plane (auth, projects, loop planning,
+verification policy, PR confirmation), D1 owns all persisted state, and the
+external executor owns untrusted code execution. This document only covers
+the Worker.
 
 ## 2. Layering & Invocation Rules
 
-1. **Transport layer (`src/server.rs`)**: route mounting, middleware
-   (CORS, trace), and HTTP (de)serialization only. Must not embed loop
-   planning policy or celld wire-format details.
-2. **Domain layer (`src/config.rs`, `src/models.rs`)**: project config
-   parsing/validation, loop definitions, agent cell ID templating.
-3. **celld bridge (`src/celld.rs`)**: translates project/loop domain data
-   into celld foundation descriptors and cell IDs. Must not perform HTTP
-   routing or own transport-level concerns.
-4. **Error handling (`src/error.rs`)**: shared `Error`/`Result` types; new
-   error variants must be handled explicitly at the transport boundary, not
-   swallowed.
+1. **Router (`worker/src/worker.js` `route()`)**: URL matching, session
+   gating, and JSON error shaping only. Must not embed loop planning policy
+   or executor wire-format details.
+2. **Domain helpers (`buildLoopPlan`, `validateLoop`, `agentCellId`,
+   `validateCompletion`)**: loop definition validation, agent cell ID
+   templating, executor payload validation. Pure functions; keep them
+   testable without D1.
+3. **Persistence (`saveProject`, `prepareRun`, `claimCompletionCallback`,
+   `deliverConfirmationEmail`)**: all D1 SQL lives here. D1 has no
+   interactive transactions; concurrency-sensitive updates use conditional
+   `UPDATE ... WHERE` guards (see the `ponytail:` note in `worker.js`).
+4. **Integrations (`githubConfig`/`githubRequest`, `sendMessage`)**: GitHub
+   and Cloudflare Email Sending calls. Repository allowlisting happens in
+   the Worker, never in the executor.
 
 ## 3. Plugin-First Principle
 
 Custom business adaptations (auth decoration, vendor protocol adaptors, data
-masking) must be implemented as modular middleware, never hardcoded into
-`src/server.rs`'s core routing.
+masking) must be implemented as small standalone helpers composed inside
+`route()`, never hardcoded into unrelated handlers.

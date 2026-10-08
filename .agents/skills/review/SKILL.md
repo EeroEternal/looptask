@@ -23,9 +23,10 @@ pass reliably surfaces these.
 3. **Layered verification**: run the free, deterministic checks first, and
    only spend manual diff-reading attention once they pass:
    ```bash
-   cargo fmt --check
-   cargo clippy --all-targets -- -D warnings
-   cargo test --workspace
+   cd worker && npm test
+node --test executor/
+   npx wrangler deploy --dry-run
+   npm --prefix web run build
    ```
    If a gate is red, fix the gate first — never read code with a red light.
 4. **Check against standing constraints**: piggybacked unrelated changes?

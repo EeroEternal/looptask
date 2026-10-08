@@ -7,15 +7,16 @@ description: Safely use git stash in looptask without stripping feature dependen
 
 ## Symptom / misjudgment
 An agent stashes "fmt noise" or "unrelated edits", then reports tests
-green — but `Cargo.toml` or a core module was stashed away and the tree no
-longer compiles.
+green — but `worker/src/worker.js` or a migration was stashed away and the
+tree no longer works.
 
 ## Hard constraints (also in `docs/ai/agents/engineering.md` §2)
 1. Message must honestly describe contents (`git stash push -m "..."`).
 2. Before stash: `git diff --stat` and confirm no current-feature dependency
    is removed.
-3. After stash: `cargo check --tests` is mandatory.
-4. Never stash `Cargo.toml` / `Cargo.lock` / build scripts — `git checkout`
+3. After stash: `cd worker && npm test` is mandatory.
+4. Never stash `worker/wrangler.toml` / `worker/migrations/` or build
+   scripts — `git checkout`
    them individually or commit separately.
 
 ## Procedure
@@ -24,7 +25,7 @@ longer compiles.
 2. If any path is required by the current feature, do **not** stash it;
    commit it, leave it unstaged, or split the change.
 3. `git stash push -m "<honest summary of what is being hidden>"`.
-4. Immediately run `cargo check --tests`.
+4. Immediately run `cd worker && npm test`.
 5. If the check fails: `git stash pop` (or apply), restore the missing
    dependency, and re-evaluate. Do not claim verification while the tree is
    broken.
@@ -32,6 +33,6 @@ longer compiles.
    work.
 
 ## Verification
-- `cargo check --tests` exits 0 on the post-stash worktree.
+- `cd worker && npm test` exits 0 on the post-stash worktree.
 - The stash message would let a human restore the right content without
   guessing.

@@ -1,6 +1,6 @@
 ---
 name: pre-push-local-gates
-description: Run local gates equivalent to CI (Rust fmt/clippy/tests) before pushing; never treat CI as a local sandbox. Use before every git push touching src/ or tests/.
+description: Run local gates equivalent to CI (worker tests, wrangler dry-run, web build) before pushing; never treat CI as a local sandbox. Use before every git push touching worker/ or web/.
 ---
 
 # Pre-push local gates
@@ -16,9 +16,10 @@ Before `git push` or opening a PR, all of the following must pass locally
 (equivalent to CI):
 
 ```bash
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test --workspace
+cd worker && npm test
+node --test executor/
+npx wrangler deploy --dry-run
+npm --prefix web run build
 ```
 
 Before cutting a release or tag, move to skill

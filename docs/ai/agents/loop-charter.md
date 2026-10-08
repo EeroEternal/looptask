@@ -18,11 +18,11 @@ allowed.
    state.
 4. **Budget**: hard cap per run — stop immediately and open an issue with the
    current state on hitting the cap; do not "try again".
-5. **Stop conditions must be machine-checkable**: e.g. `cargo fmt --check`,
-   `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace` all
+5. **Stop conditions must be machine-checkable**: e.g. `cd worker && npm test`,
+   `npx wrangler deploy --dry-run`, `npm --prefix web run build` all
    green, and diff stays inside the allow-list. If a condition can't be
    judged mechanically, stop and open an issue rather than guessing.
-6. **Never enter**: loop verifier command definitions, celld runtime
+6. **Never enter**: loop verifier command definitions, executor callback
    protocol boundaries, production tuning, the release process, or SQL
    migration content (migration files are always human-authored/reviewed).
 7. **Auditable**: each run's report (what was done, diff summary, budget

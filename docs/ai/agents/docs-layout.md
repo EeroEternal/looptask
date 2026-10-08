@@ -12,7 +12,7 @@ Describes the structure and lifecycle of the `docs/` tree.
 ## Document Lifecycle Discipline
 
 1. **No Phantom Capabilities**: never document skeleton-only or hypothetical
-   features (e.g. unimplemented loop types, unbuilt celld endpoints) as
+   features (e.g. unimplemented loop types, unbuilt executor endpoints) as
    ready.
 2. **Deterministic Verification**: config/JSON examples and code snippets
    inside documentation must be executable and verified against

@@ -1,7 +1,7 @@
 {
   "name": "workspace",
   "version": "1.0.0",
-  "description": "`looptask` is a Rust Loop Engineering service for AI-assisted development maintenance loops.",
+  "description": "`looptask` is a Cloudflare Worker Loop Engineering service for AI-assisted development maintenance loops.",
   "main": "index.js",
   "directories": {
     "doc": "docs",
