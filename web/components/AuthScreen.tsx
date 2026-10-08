@@ -1,82 +1,48 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import { api } from "../lib/api";
 
 type Props = { onAuthenticated: () => void };
 
 export function AuthScreen({ onAuthenticated }: Props) {
   const [mode, setMode] = useState<"register" | "login">("register");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [code, setCode] = useState("");
-  const [verification, setVerification] = useState(false);
-  const [cooldown, setCooldown] = useState(0);
+  const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState(false);
 
-  useEffect(() => {
-    if (!cooldown) return;
-    const timer = window.setTimeout(() => setCooldown((value) => value - 1), 1000);
-    return () => window.clearTimeout(timer);
-  }, [cooldown]);
-
   function changeMode(nextMode: "register" | "login") {
-    const hadVerification = verification;
     setMode(nextMode);
-    setVerification(false);
-    setCode("");
     setMessage("");
     setError(false);
-    if (hadVerification) {
-      setMessage(
-        nextMode === "register"
-          ? "已切换到注册流程。刚才的验证码仍可继续使用，必要时可以直接重新发送。"
-          : "已切换到登录流程。刚才的验证码仍可继续使用，必要时可以直接重新发送。",
-      );
-    }
+    setPassword("");
   }
 
-  async function requestCode(event?: FormEvent) {
-    event?.preventDefault();
-    setBusy(true);
-    setError(false);
-    try {
-      const result = await api<{ message?: string }>(
-        "/api/v1/auth/request-code",
-        {
-          method: "POST",
-          body: JSON.stringify({ email, purpose: mode, displayName }),
-        },
-      );
-      setVerification(true);
-      setCooldown(60);
-      setMessage(result.message || "验证码已发送");
-    } catch (requestError) {
-      setError(true);
-      setMessage(
-        requestError instanceof Error ? requestError.message : "请求失败",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function verifyCode(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError(false);
     try {
-      await api("/api/v1/auth/verify-code", {
-        method: "POST",
-        body: JSON.stringify({ email, code, purpose: mode, displayName }),
-      });
+      await api(
+        mode === "register" ? "/api/v1/auth/register" : "/api/v1/auth/login",
+        {
+          method: "POST",
+          body: JSON.stringify(
+            mode === "register"
+              ? { username, password, displayName, email }
+              : { username, password },
+          ),
+        },
+      );
       onAuthenticated();
     } catch (requestError) {
       setError(true);
       setMessage(
-        requestError instanceof Error ? requestError.message : "验证失败",
+        requestError instanceof Error ? requestError.message : "request failed",
       );
     } finally {
       setBusy(false);
@@ -89,27 +55,27 @@ export function AuthScreen({ onAuthenticated }: Props) {
         <section className="auth-story">
           <div>
             <Brand kicker="Loop engineering" />
-            <h1 className="story-title">把重复维护，变成可控的循环。</h1>
+            <h1 className="story-title">Turn recurring maintenance into controlled loops.</h1>
             <p className="story-copy">
-              定义边界，预览决策，交给 Agent cell 执行。每一次 loop
-              都有证据、预算和明确的停止条件。
+              Define the boundaries, review the plan, hand it to the
+              executor. Every loop keeps evidence, a budget and explicit stop conditions.
             </p>
-            <div className="story-points" aria-label="Loop 工作流程">
-              <StoryPoint number="01" title="先定义边界">
-                项目上下文、允许路径和保护分支
+            <div className="story-points" aria-label="Loop workflow">
+              <StoryPoint number="01" title="Define boundaries">
+                Project context, allowed paths and protected branches
               </StoryPoint>
-              <StoryPoint number="02" title="再检查策略">
-                阶段、闸门、预算和人工裁决点
+              <StoryPoint number="02" title="Review the policy">
+                Stages, gates, budget and human decision points
               </StoryPoint>
-              <StoryPoint number="03" title="最后交给执行">
-                Agent cell 留下事件、任务与证据
+              <StoryPoint number="03" title="Hand it over">
+                The executor leaves events, tasks and evidence behind
               </StoryPoint>
             </div>
           </div>
           <div className="story-foot">
-            <span>隔离 worktree</span>
-            <span>可验证策略</span>
-            <span>人工闸门</span>
+            <span>Isolated worktree</span>
+            <span>Verifiable policy</span>
+            <span>Human gate</span>
           </div>
         </section>
 
@@ -121,7 +87,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
               role="tab"
               type="button"
             >
-              注册
+              Sign up
             </button>
             <button
               className={`auth-tab ${mode === "login" ? "active" : ""}`}
@@ -129,81 +95,61 @@ export function AuthScreen({ onAuthenticated }: Props) {
               role="tab"
               type="button"
             >
-              登录
+              Log in
             </button>
           </div>
-          <h1>{mode === "register" ? "创建你的工作空间" : "回到你的工作空间"}</h1>
+          <h1>{mode === "register" ? "Create your workspace" : "Back to your workspace"}</h1>
           <p className="intro">
             {mode === "register"
-              ? "用邮箱验证码确认身份，不需要额外密码。"
-              : "输入注册邮箱，我们会发送一次性验证码。"}
+              ? "Sign up with a username and password - no email codes."
+              : "Log in with your username and password."}
           </p>
 
-          {!verification ? (
-            <form onSubmit={requestCode}>
-              {mode === "register" && (
-                <Field label="显示名称">
+          <form onSubmit={submit}>
+            <Field label="Username">
+              <input
+                required
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder="3-32 characters: letters, digits, _ or -"
+                autoComplete="username"
+              />
+            </Field>
+            <Field label="Password">
+              <input
+                required
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="At least 8 characters"
+                autoComplete={mode === "register" ? "new-password" : "current-password"}
+              />
+            </Field>
+            {mode === "register" && (
+              <>
+                <Field label="Display name (optional)">
                   <input
                     value={displayName}
                     onChange={(event) => setDisplayName(event.target.value)}
-                    placeholder="例如 Xin"
+                    placeholder="e.g. Xin"
                     autoComplete="name"
                   />
                 </Field>
-              )}
-              <Field label="邮箱地址">
-                <input
-                  required
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  placeholder="you@company.com"
-                  autoComplete="email"
-                />
-              </Field>
-              <button className="primary full" disabled={busy} type="submit">
-                {busy ? "发送中…" : "发送验证码"}
-              </button>
-            </form>
-          ) : (
-            <form onSubmit={verifyCode}>
-              <p className="helper">
-                验证码已发送至 <strong>{email}</strong>
-              </p>
-              <Field label="6 位验证码">
-                <div className="code-row">
+                <Field label="Email (optional, for PR confirmation notices)">
                   <input
-                    required
-                    inputMode="numeric"
-                    pattern="[0-9]{6}"
-                    maxLength={6}
-                    value={code}
-                    onChange={(event) => setCode(event.target.value)}
-                    placeholder="000000"
-                    autoComplete="one-time-code"
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="you@company.com"
+                    autoComplete="email"
                   />
-                  <button
-                    className="secondary resend"
-                    disabled={busy || cooldown > 0}
-                    onClick={() => void requestCode()}
-                    type="button"
-                  >
-                    {cooldown ? `重发 ${cooldown}s` : "重新发送"}
-                  </button>
-                </div>
-              </Field>
-              <button className="primary full" disabled={busy} type="submit">
-                {busy ? "确认中…" : "确认并进入"}
-              </button>
-              <button
-                className="quiet full"
-                onClick={() => setVerification(false)}
-                type="button"
-              >
-                更换邮箱
-              </button>
-            </form>
-          )}
+                </Field>
+              </>
+            )}
+            <button className="primary full" disabled={busy} type="submit">
+              {busy ? "One moment…" : mode === "register" ? "Sign up" : "Log in"}
+            </button>
+          </form>
 
           {message && (
             <div className={`alert show ${error ? "error" : ""}`} role="alert">
@@ -211,7 +157,7 @@ export function AuthScreen({ onAuthenticated }: Props) {
             </div>
           )}
           <p className="helper auth-disclaimer">
-            继续即表示你同意以安全方式保存 Loop 配置与运行记录。
+            By continuing you agree that loop configuration and run history are stored securely.
           </p>
         </section>
       </div>

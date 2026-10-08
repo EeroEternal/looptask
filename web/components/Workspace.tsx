@@ -1,292 +1,597 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
 
 type AnyRecord = Record<string, any>;
 type Run = AnyRecord & { id: string; status: string };
-type User = { displayName?: string; email?: string };
-type GitHubRepository = { fullName: string; htmlUrl: string; defaultBranch: string; private: boolean; canPush: boolean };
-type Schedule = "manual" | "resident";
-type VerifierDraft = { name: string; command: string; timeoutSeconds: number };
+type User = { displayName?: string; email?: string; username?: string };
+type Repo = { fullName: string; htmlUrl: string; defaultBranch: string; private: boolean; canPush: boolean };
+type Task = {
+  id: string;
+  name: string;
+  repository: string | null;
+  goal: string;
+  resident: boolean;
+  intervalSeconds: number;
+  config: AnyRecord;
+  loopName: string;
+};
 
-const emptyVerifier = (): VerifierDraft => ({
-  name: "test",
-  command: "",
-  timeoutSeconds: 300,
+type Draft = {
+  mode: "create" | "edit";
+  name: string;
+  repoUrl: string;
+  goal: string;
+  verifier: string;
+  resident: boolean;
+  intervalSeconds: number;
+};
+
+const emptyDraft = (): Draft => ({
+  mode: "create",
+  name: "",
+  repoUrl: "",
+  goal: "",
+  verifier: "",
+  resident: false,
+  intervalSeconds: 900,
 });
 
+function toTask(saved: AnyRecord): Task | null {
+  const config = saved.config || saved;
+  const loop = config.loops?.[0];
+  if (!loop) return null;
+  return {
+    id: saved.id,
+    name: config.name,
+    repository: config.repository || null,
+    goal: loop.goal || "",
+    resident: loop.trigger?.type === "resident",
+    intervalSeconds: Number(loop.trigger?.intervalSeconds) || 900,
+    loopName: loop.name,
+    config,
+  };
+}
+
+function buildProject(draft: Draft, repo: Repo | null): AnyRecord {
+  return {
+    name: draft.name.trim(),
+    repository: repo?.htmlUrl || null,
+    defaultBranch: repo?.defaultBranch || "main",
+    techStack: [],
+    docs: [],
+    sourcePaths: [],
+    loops: [
+      {
+        name: draft.name.trim(),
+        kind: "architecture_scan",
+        goal: draft.goal.trim(),
+        summary: "",
+        mode: "human-gated",
+        trigger: draft.resident
+          ? { type: "resident", intervalSeconds: Math.max(60, draft.intervalSeconds) }
+          : { type: "manual" },
+        agent: {
+          cellIdTemplate: "{project}/{loop}/{agent}",
+          sandboxRequired: true,
+          allowedTools: ["read-repo"],
+          humanGate: true,
+        },
+        verifiers: draft.verifier.trim()
+          ? [
+              {
+                name: "acceptance-check",
+                command: draft.verifier.trim().split(/\s+/),
+                timeoutSeconds: 300,
+              },
+            ]
+          : [],
+        state: { hotSqliteScope: "agent-cell", artifactUriPrefix: "r2://looptask/agents/{agent}/artifacts/", hotMessageLimit: 50 },
+        stopRules: { maxSteps: 12, maxConsecutiveFailures: 3, largeFileLines: 500 },
+        escalationRules: [],
+        steps: [
+          {
+            id: "execute-task",
+            title: "Execute task",
+            purpose: draft.goal.trim(),
+            command: [],
+            allowedPaths: [],
+            forbiddenActions: ["push-main", "merge-pr", "create-tag"],
+          },
+        ],
+        decisionRules: [],
+        budget: { maxDurationMinutes: 30, maxToolCalls: 200 },
+        safety: {
+          protectedBranches: [repo?.defaultBranch || "main"],
+          allowedPaths: [],
+          forbiddenActions: [],
+          cleanupPolicy: "remove-worktree",
+        },
+      },
+    ],
+  };
+}
+
 export function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [events, setEvents] = useState<AnyRecord[]>([]);
-  const [project, setProject] = useState("looptask");
-  const [repository, setRepository] = useState("");
-  const [branch, setBranch] = useState("main");
-  const [goal, setGoal] = useState("");
-  const [loopName, setLoopName] = useState("repository-task");
-  const [agentKey, setAgentKey] = useState("default");
-  const [verifiers, setVerifiers] = useState<VerifierDraft[]>([emptyVerifier()]);
-  const [schedule, setSchedule] = useState<Schedule>("manual");
-  const [residentInterval, setResidentInterval] = useState(900);
+  const [github, setGithub] = useState<{ connected: boolean; login?: string }>({ connected: false });
+  const [repos, setRepos] = useState<Repo[]>([]);
+  const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState("");
-  const [notice, setNotice] = useState("准备就绪");
   const [toast, setToast] = useState("");
   const [toastError, setToastError] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState("");
-  const [githubOpen, setGithubOpen] = useState(false);
-  const [githubRepositories, setGithubRepositories] = useState<GitHubRepository[]>([]);
-  const [githubLoading, setGithubLoading] = useState(false);
-  const [githubError, setGithubError] = useState("");
 
-  const projectConfig = useMemo(() => ({
-    name: project.trim() || "looptask",
-    repository: repository.trim() || null,
-    defaultBranch: branch.trim() || "main",
-    techStack: [],
-    docs: [],
-    sourcePaths: [],
-    celld: {
-      appDir: "celld",
-      bucket: "looptask",
-      publicUrl: "http://127.0.0.1:9876",
-      internalUrl: null,
-      durableObjectClass: "AgentCell",
-      artifactBucketPrefix: "agents",
-    },
-    loops: [{
-      name: loopName.trim() || "repository-task",
-      kind: "architecture_scan",
-      goal,
-      summary: "",
-      mode: "human-gated",
-      trigger: schedule === "resident"
-        ? { type: "resident", intervalSeconds: Math.max(60, residentInterval) }
-        : { type: "manual" },
-      agent: {
-        cellIdTemplate: "{project}/{loop}/{agent}",
-        sandboxRequired: true,
-        allowedTools: ["read-repo"],
-        humanGate: true,
-      },
-      verifiers: verifiers.filter((item) => item.command.trim()).map((item) => ({
-        name: item.name.trim() || "acceptance-check",
-        command: item.command.trim().split(/\s+/),
-        timeoutSeconds: item.timeoutSeconds || 300,
-      })),
-      state: { hotSqliteScope: "agent-cell", artifactUriPrefix: "r2://looptask/agents/{agent}/artifacts/", hotMessageLimit: 50 },
-      stopRules: { maxSteps: 12, maxConsecutiveFailures: 3, largeFileLines: 500 },
-      escalationRules: [],
-      steps: [{
-        id: "execute-repository-task",
-        title: "执行仓库任务",
-        purpose: goal.trim() || "按照用户提交的任务 Prompt 生成可审阅变更",
-        command: [],
-        allowedPaths: [],
-        forbiddenActions: ["push-main", "merge-pr", "create-tag"],
-      }],
-      decisionRules: [],
-      budget: { maxDurationMinutes: 30, maxToolCalls: 200 },
-      safety: { protectedBranches: [branch.trim() || "main"], allowedPaths: [], forbiddenActions: [], cleanupPolicy: "remove-worktree" },
-    }],
-  }), [project, repository, branch, goal, loopName, schedule, residentInterval, verifiers]);
+  useEffect(() => {
+    void loadAll();
+  }, []);
 
-  useEffect(() => { void loadWorkspace(); }, []);
-
-  async function loadWorkspace() {
+  async function loadAll() {
     setLoadError("");
     try {
-      const [, projects, runData] = await Promise.all([
-        api<AnyRecord[]>("/api/v1/loop-templates"),
+      const [status, projects, runData] = await Promise.all([
+        api<{ connected: boolean; login?: string }>("/api/v1/github/status").catch(() => ({ connected: false })),
         api<AnyRecord[]>("/api/v1/projects"),
         api<Run[]>("/api/v1/runs"),
       ]);
+      setGithub(status);
       setRuns(runData || []);
-      if (projects?.[0]) {
-        const saved = await api<AnyRecord>(`/api/v1/projects/${encodeURIComponent(projects[0].id)}`);
-        restoreProject(saved.config || saved);
-      }
-      setNotice(runData?.[0] ? `最近一次运行：${statusLabel(runData[0].status)}` : "准备就绪");
+      const configs = await Promise.all(
+        (projects || []).slice(0, 20).map((p) => api<AnyRecord>(`/api/v1/projects/${p.id}`).catch(() => null)),
+      );
+      setTasks(
+        configs
+          .filter((c): c is AnyRecord => !!c)
+          .map(toTask)
+          .filter((t): t is Task => !!t),
+      );
       setLoaded(true);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "加载工作区失败";
-      setLoadError(message);
+      setLoadError(error instanceof Error ? error.message : "failed to load workspace");
     }
   }
 
-  function restoreProject(config: AnyRecord) {
-    setProject(config.name || "looptask");
-    setRepository(config.repository || "");
-    setBranch(config.defaultBranch || "main");
-    const loop = config.loops?.[0];
-    if (!loop) return;
-    setLoopName(loop.name || "repository-task");
-    setGoal(loop.goal || "");
-    setVerifiers(normalizeVerifiers(loop.verifiers).length ? normalizeVerifiers(loop.verifiers) : [emptyVerifier()]);
-    if (loop.trigger?.type === "resident") {
-      setSchedule("resident");
-      setResidentInterval(Number(loop.trigger.intervalSeconds) || 900);
-    } else setSchedule("manual");
-  }
-
-  async function saveProject() {
-    await action("save", async () => {
-      await api("/api/v1/projects", { method: "POST", body: JSON.stringify(projectConfig) });
-      setNotice("任务草稿已保存");
-      showToast("项目和任务已保存");
-    });
-  }
-
-  async function validate() {
-    await action("validate", async () => {
-      const result = await api<AnyRecord>("/api/v1/loops/validate", {
-        method: "POST", body: JSON.stringify({ project: projectConfig, loopName }),
+  async function openDialog(task?: Task) {
+    if (task) {
+      const loop = task.config.loops?.[0] || {};
+      setDraft({
+        mode: "edit",
+        name: task.name,
+        repoUrl: task.repository || "",
+        goal: task.goal,
+        verifier: (loop.verifiers || []).map((v: AnyRecord) => (v.command || []).join(" ")).join(" ") || "",
+        resident: task.resident,
+        intervalSeconds: task.intervalSeconds,
       });
-      if (!result.accepted) throw new Error(result.reason || "任务定义未通过校验");
-      setNotice("校验通过，可以运行");
-      showToast("任务定义已通过校验");
+    } else {
+      setDraft(emptyDraft());
+    }
+    if (github.connected && !repos.length) {
+      api<Repo[]>("/api/v1/github/repositories").then(setRepos).catch(() => setRepos([]));
+    }
+  }
+
+  async function saveTask(runNow: boolean) {
+    if (!draft) return;
+    const name = draft.name.trim();
+    if (!name) return showToast("task name is required", true);
+    if (!draft.goal.trim()) return showToast("task goal is required", true);
+    await action(runNow ? "dispatch" : "save", async () => {
+      const repo = repos.find((r) => r.htmlUrl === draft.repoUrl) || null;
+      const project = buildProject({ ...draft, name }, repo);
+      await api("/api/v1/projects", { method: "POST", body: JSON.stringify(project) });
+      if (runNow) {
+        const result = await api<AnyRecord>("/api/v1/loops/dispatch", {
+          method: "POST",
+          body: JSON.stringify({ project, loopName: name, agentKey: "default", idempotencyKey: crypto.randomUUID() }),
+        });
+        if (!result.accepted) throw new Error(result.reason || "task was not accepted by the run queue");
+      }
+      setDraft(null);
+      showToast(runNow ? "task dispatched" : "task saved");
+      await loadAll();
     });
   }
 
-  async function dispatch() {
-    if (!repository.trim() || !goal.trim()) {
-      showToast("请先填写仓库地址和任务目标", true);
-      return;
-    }
-    await action("dispatch", async () => {
-      await api("/api/v1/projects", { method: "POST", body: JSON.stringify(projectConfig) });
+  async function runTask(task: Task) {
+    await action(`run-${task.id}`, async () => {
       const result = await api<AnyRecord>("/api/v1/loops/dispatch", {
         method: "POST",
-        body: JSON.stringify({ project: projectConfig, loopName, agentKey, idempotencyKey: crypto.randomUUID() }),
+        body: JSON.stringify({
+          project: task.config,
+          loopName: task.loopName,
+          agentKey: "default",
+          idempotencyKey: crypto.randomUUID(),
+        }),
       });
-      if (!result.accepted) throw new Error(result.reason || "任务未被执行队列接受");
-      setNotice(schedule === "resident" ? `常驻唤醒已启动 · 每 ${formatInterval(residentInterval)}` : "任务已发送至 Agent cell");
-      showToast(result.deduplicated ? "已复用相同运行" : schedule === "resident" ? "常驻唤醒已启动" : "任务已发送至 Agent cell");
-      await loadRuns();
+      if (!result.accepted) throw new Error(result.reason || "task was not accepted by the run queue");
+      showToast("task dispatched");
+      await loadAll();
     });
   }
 
-  async function stopResident() {
-    await action("stop", async () => {
+  async function stopResident(task: Task) {
+    await action(`stop-${task.id}`, async () => {
       await api("/api/v1/loops/resident/stop", {
-        method: "POST", body: JSON.stringify({ project: projectConfig, loopName, agentKey }),
+        method: "POST",
+        body: JSON.stringify({ project: task.config, loopName: task.loopName, agentKey: "default" }),
       });
-      setSchedule("manual");
-      setNotice("常驻任务已停止");
-      showToast("常驻任务已停止");
+      showToast("recurring task stopped");
+      await loadAll();
     });
   }
 
-  async function openGitHubBinding() {
-    setGithubOpen(true);
-    setGithubLoading(true);
-    setGithubError("");
-    try {
-      setGithubRepositories(await api<GitHubRepository[]>("/api/v1/github/repositories"));
-    } catch (error) {
-      setGithubError(error instanceof Error ? error.message : "无法加载可绑定的 GitHub 仓库");
-    } finally {
-      setGithubLoading(false);
-    }
-  }
-
-  async function bindRepository(repo: GitHubRepository) {
-    if (!repo.canPush) return;
-    await action("bind-github", async () => {
-      const bound = { ...projectConfig, repository: repo.htmlUrl, defaultBranch: repo.defaultBranch };
-      await api("/api/v1/projects", { method: "POST", body: JSON.stringify(bound) });
-      setRepository(repo.htmlUrl);
-      setBranch(repo.defaultBranch);
-      setGithubOpen(false);
-      setNotice(`已绑定 ${repo.fullName} · ${repo.defaultBranch}`);
-      showToast("GitHub 仓库已绑定并保存");
+  async function deleteTask(task: Task) {
+    await action(`delete-${task.id}`, async () => {
+      await api(`/api/v1/projects/${encodeURIComponent(task.id)}`, { method: "DELETE" });
+      showToast("task deleted");
+      await loadAll();
     });
-  }
-
-  async function loadRuns() {
-    const result = await api<Run[]>("/api/v1/runs");
-    setRuns(result || []);
   }
 
   async function loadEvents(id: string) {
     await action("events", async () => {
-      const result = await api<AnyRecord[]>(`/api/v1/runs/${encodeURIComponent(id)}/events`);
-      setEvents(result || []);
+      setEvents((await api<AnyRecord[]>(`/api/v1/runs/${encodeURIComponent(id)}/events`)) || []);
     });
   }
 
   async function confirmMerge(run: Run, decision: "approve" | "reject") {
-    await action(`confirmation-${run.id}`, async () => {
+    await action(`confirm-${run.id}`, async () => {
       await api(`/api/v1/runs/${encodeURIComponent(run.id)}/merge-confirmation`, {
-        method: "POST", body: JSON.stringify({ decision }),
+        method: "POST",
+        body: JSON.stringify({ decision }),
       });
-      showToast(decision === "approve" ? "已记录批准确认；尚未合并 PR" : "已记录拒绝确认；尚未合并 PR");
-      await loadRuns();
+      showToast(decision === "approve" ? "approval recorded - nothing is merged automatically" : "rejection recorded - nothing is merged automatically");
+      await loadAll();
     });
   }
 
   async function action(name: string, task: () => Promise<void>) {
     setBusy(name);
-    try { await task(); } catch (error) { showToast(error instanceof Error ? error.message : "请求失败", true); }
-    finally { setBusy(""); }
+    try {
+      await task();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "request failed", true);
+    } finally {
+      setBusy("");
+    }
   }
 
   function showToast(message: string, error = false) {
-    setToast(message); setToastError(error);
+    setToast(message);
+    setToastError(error);
     window.setTimeout(() => setToast(""), 4000);
   }
 
-  const canRun = Boolean(repository.trim() && goal.trim() && verifiers.some((item) => item.command.trim()) && !busy);
-  const currentRun = runs[0];
-  const displayName = user.displayName || user.email?.split("@")[0] || "开发者";
+  const displayName = user.displayName || user.username || user.email?.split("@")[0] || "operator";
 
-  if (!loaded && !loadError) return <div className="workspace-loading"><div className="loading-mark">lt</div><span>正在载入工作区</span></div>;
+  if (!loaded && !loadError) {
+    return (
+      <div className="workspace-loading">
+        <div className="loading-mark">lt</div>
+        <span>Loading workspace</span>
+      </div>
+    );
+  }
 
   return (
     <div className="workspace-shell">
       <header className="workspace-header">
-        <div className="wordmark"><span className="wordmark-mark">lt</span><span>looptask</span><small>task runner</small></div>
-        <div className="header-actions"><span className="header-status"><i />{notice}</span><span className="user-name">{displayName}</span><button className="logout-link" onClick={onLogout} type="button">退出</button></div>
+        <div className="wordmark">
+          <span className="wordmark-mark">lt</span>
+          <span>looptask</span>
+          <small>task runner</small>
+        </div>
+        <div className="header-actions">
+          {github.connected ? (
+            <span className="header-status" title="GitHub connected">
+              <i />
+              GH · {github.login || "connected"}
+            </span>
+          ) : (
+            <a className="run-button" href="/api/v1/github/connect">
+              Connect GitHub
+            </a>
+          )}
+          <span className="user-name">{displayName}</span>
+          <button className="logout-link" onClick={onLogout} type="button">
+            Log out
+          </button>
+        </div>
       </header>
-      <main className="workspace-main">
-        <div className="intro-row"><div><p className="overline">工作区 / 新任务</p><h1>让一个任务跑起来。</h1></div><div className="github-note"><span className="github-symbol">GH</span><div><strong>{repository ? "GitHub 仓库已连接" : "绑定允许的 GitHub 仓库"}</strong><small>{repository ? `${repository} · ${branch}` : "执行器签名回报完成后，系统才会创建 PR 并请求你的确认。"}</small></div><button onClick={() => void openGitHubBinding()} type="button">{repository ? "更换" : "绑定"}</button></div></div>
-        {loadError && <div className="error-state"><strong>工作区暂时无法加载</strong><span>{loadError}</span><button onClick={() => void loadWorkspace()} type="button">重试</button></div>}
 
-        <section className="task-layout">
-          <div className="task-card">
-            <div className="card-heading"><div><p className="overline">Task definition</p><h2>配置一个任务</h2></div><span className="draft-pill">草稿</span></div>
-            <div className="form-section"><p className="section-number">01 <span>项目</span></p><div className="field-grid"><Field label="项目名称"><input value={project} onChange={(e) => setProject(e.target.value)} placeholder="例如 looptask" /></Field><Field label="默认分支"><input className="mono" readOnly={!!repository} value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" /></Field></div><Field label="GitHub 仓库地址"><div className="repository-binding"><input type="url" readOnly value={repository} placeholder="通过“绑定 GitHub 仓库”选择" /><button onClick={() => void openGitHubBinding()} type="button">{repository ? "更换仓库" : "绑定 GitHub 仓库"}</button></div></Field></div>
-            <div className="form-section"><p className="section-number">02 <span>目标</span></p><Field label="任务名称"><input value={loopName} onChange={(e) => setLoopName(e.target.value)} placeholder="例如 fix-stale-docs" /></Field><Field label="你希望 Agent 完成什么？"><textarea className="goal-input" value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="清楚描述结果、范围和限制。比如：找出 API 文档中已经过期的示例，只修改 docs/ 目录。" rows={6} /><div className="field-meta"><span>写得具体，Agent 才能做出可审阅的改动。</span><code>{goal.length} 字</code></div></Field></div>
-            <div className="form-section"><p className="section-number">03 <span>完成证明</span></p><p className="section-help">这些命令会随任务发送给执行器；执行器接入后，全部通过才算完成。</p><div className="verifier-list">{verifiers.map((item, index) => <div className="verifier-row" key={`${index}-${item.name}`}><span className="terminal-prefix">$</span><input aria-label={`验收命令 ${index + 1}`} className="mono" value={item.command} onChange={(e) => setVerifiers((items) => items.map((v, i) => i === index ? { ...v, command: e.target.value } : v))} placeholder="npm test" /><button aria-label="移除验收命令" className="remove-button" onClick={() => setVerifiers((items) => items.length > 1 ? items.filter((_, i) => i !== index) : items)} type="button">移除</button></div>)}</div><button className="add-verifier" onClick={() => setVerifiers((items) => [...items, emptyVerifier()])} type="button">＋ 添加一条命令</button></div>
-            <div className="form-section schedule-section"><p className="section-number">04 <span>运行时机</span></p><div className="schedule-options"><button className={schedule === "manual" ? "schedule-option selected" : "schedule-option"} onClick={() => setSchedule("manual")} type="button"><span className="schedule-icon">→</span><span><strong>手动运行一次</strong><small>你准备好后，点击运行</small></span><i>{schedule === "manual" ? "✓" : ""}</i></button><button className={schedule === "resident" ? "schedule-option selected" : "schedule-option"} onClick={() => setSchedule("resident")} type="button"><span className="schedule-icon">↻</span><span><strong>常驻，按固定间隔重复</strong><small>任务会持续唤醒，不使用 Cron</small></span><i>{schedule === "resident" ? "✓" : ""}</i></button></div>{schedule === "resident" && <div className="interval-field"><label htmlFor="interval">每隔多久运行一次？</label><div><input id="interval" min={60} type="number" value={residentInterval} onChange={(e) => setResidentInterval(Number(e.target.value) || 60)} /><span>秒 · 即每 {formatInterval(residentInterval)}</span></div></div>}</div>
-            <div className="form-actions"><button className="secondary-button" disabled={!!busy} onClick={() => void saveProject()} type="button">{busy === "save" ? "保存中" : "保存草稿"}</button><button className="secondary-button" disabled={!!busy} onClick={() => void validate()} type="button">{busy === "validate" ? "校验中" : "先校验"}</button><button className="run-button" disabled={!canRun} onClick={() => void dispatch()} type="button">{busy === "dispatch" ? "派发中…" : schedule === "resident" ? "启动常驻" : "运行任务"}<span>→</span></button></div>
+      <main className="workspace-main">
+        <div className="intro-row">
+          <div>
+            <p className="overline">Tasks</p>
+            <h1>Get a task running.</h1>
+            <p className="intro-copy">Pick a repo, describe the goal, dispatch. The executor reports back for your confirmation.</p>
           </div>
-          <aside className="task-aside"><div className="aside-card github-card"><p className="overline">GitHub connection</p><h3>PR 自动化已配置</h3><p>GitHub Token 仅允许操作指定仓库。受信任执行器完成变更并通过验收后，looptask 会创建 pull request 并发送确认邮件。</p><button onClick={() => setGithubOpen(true)} type="button">查看当前能力 <span>→</span></button></div><div className="aside-card"><p className="overline">当前配置</p><div className="config-line"><span>仓库</span><strong>{repository || "尚未填写"}</strong></div><div className="config-line"><span>分支</span><strong>{branch || "main"}</strong></div><div className="config-line"><span>运行方式</span><strong>{schedule === "manual" ? "手动一次" : `常驻 · ${formatInterval(residentInterval)}`}</strong></div><div className="config-line"><span>验收命令</span><strong>{verifiers.filter((v) => v.command.trim()).length} 条</strong></div></div></aside>
+          <div className="hero-actions">
+            <button className="run-button dispatch-button" disabled={!!busy} onClick={() => void openDialog()} type="button">
+              + New task
+            </button>
+          </div>
+        </div>
+
+        {loadError && (
+          <div className="error-state">
+            <strong>Workspace failed to load</strong>
+            <span>{loadError}</span>
+            <button onClick={() => void loadAll()} type="button">
+              Retry
+            </button>
+          </div>
+        )}
+
+        <section className="runs-card" style={{ marginTop: 0 }}>
+          <div className="runs-heading">
+            <div>
+              <p className="overline">My tasks</p>
+              <h2>My tasks</h2>
+            </div>
+          </div>
+          {tasks.length ? (
+            <div className="run-list">
+              {tasks.map((task) => {
+                const latest = runs.find((r) => r.projectName === task.name);
+                return (
+                  <div className="run-item" key={task.id}>
+                    <span className={`run-dot ${latest?.status || ""}`} />
+                    <span className="run-copy">
+                      <strong>{task.name}</strong>
+                      <small>
+                        {task.repository || "no repository"} · {task.resident ? `recurring · ${formatInterval(task.intervalSeconds)}` : "manual"}
+                      </small>
+                    </span>
+                    <b>{latest ? statusLabel(latest.status) : "never run"}</b>
+                    <button className="secondary-button" disabled={!!busy} onClick={() => void runTask(task)} type="button">
+                      Run
+                    </button>
+                    <button className="secondary-button" disabled={!!busy} onClick={() => void openDialog(task)} type="button">
+                      Edit
+                    </button>
+                    <button
+                      className="remove-button"
+                      disabled={!!busy}
+                      onClick={() => {
+                        if (window.confirm(`Delete task "${task.name}"? Its runs are removed too.`)) void deleteTask(task);
+                      }}
+                      type="button"
+                    >
+                      Delete
+                    </button>
+                    {task.resident && (
+                      <button className="remove-button" disabled={!!busy} onClick={() => void stopResident(task)} type="button">
+                        Stop
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="runs-empty">
+              <span className="empty-line" />
+              <strong>No tasks yet</strong>
+              <p>Use "+ New task": pick a repo and describe the goal in the dialog.</p>
+            </div>
+          )}
         </section>
 
-        <section className="runs-card"><div className="runs-heading"><div><p className="overline">Recent runs</p><h2>最近派发</h2></div>{currentRun && <span className="latest-label">最新 · {statusLabel(currentRun.status)}</span>}</div>{runs.length ? <div className="run-list">{runs.slice(0, 6).map((run) => <div key={run.id}><button className="run-item" onClick={() => void loadEvents(run.id)} type="button"><span className={`run-dot ${run.status}`} /><span className="run-copy"><strong>{run.projectName || run.project || project} <em>/</em> {run.loopName || loopName}</strong><small>{run.startedAt ? formatDate(run.startedAt) : `运行 ${run.id}`}</small></span><b>{run.status === "needs-human" && run.confirmationState === "pending" ? "等待确认" : statusLabel(run.status)}</b><span className="run-arrow">→</span></button>{run.prUrl && <div className="events-preview"><a href={run.prUrl} target="_blank" rel="noreferrer">查看 PR #{run.prNumber || ""}</a>{run.emailDeliveryState !== "sent" && <span>确认邮件尚未确认送达，请直接查看 PR。</span>}{run.status === "needs-human" && run.confirmationState === "pending" && <span>等待你的确认；确认仅记录决定，不会合并。</span>}{run.status === "needs-human" && run.confirmationState === "pending" && <span><button disabled={!!busy} onClick={() => void confirmMerge(run, "approve")} type="button">批准</button> <button disabled={!!busy} onClick={() => void confirmMerge(run, "reject")} type="button">拒绝</button></span>}</div>}</div>)}</div> : <div className="runs-empty"><span className="empty-line" /><strong>还没有派发记录</strong><p>配置好第一个任务后，它会出现在这里。</p></div>}{events.length > 0 && <div className="events-preview"><strong>派发事件</strong>{events.slice(-3).map((event, index) => <span key={event.id || index}>{event.eventType || "event"}</span>)}</div>}</section>
-        {schedule === "resident" && <button className="stop-resident" disabled={!!busy} onClick={() => void stopResident()} type="button">停止当前常驻任务</button>}
+        <section className="runs-card">
+          <div className="runs-heading">
+            <div>
+              <p className="overline">Recent runs</p>
+              <h2>Recent runs</h2>
+            </div>
+            {runs[0] && <span className="latest-label">latest · {statusLabel(runs[0].status)}</span>}
+          </div>
+          {runs.length ? (
+            <div className="run-list">
+              {runs.slice(0, 6).map((run) => (
+                <div key={run.id}>
+                  <button className="run-item" onClick={() => void loadEvents(run.id)} type="button">
+                    <span className={`run-dot ${run.status}`} />
+                    <span className="run-copy">
+                      <strong>{run.projectName}</strong>
+                      <small>{run.startedAt ? formatDate(run.startedAt) : `Run ${run.id}`}</small>
+                    </span>
+                    <b>{run.status === "needs-human" && run.confirmationState === "pending" ? "awaiting approval" : statusLabel(run.status)}</b>
+                    <span className="run-arrow">→</span>
+                  </button>
+                  {run.prUrl && (
+                    <div className="events-preview">
+                      <a href={run.prUrl} target="_blank" rel="noreferrer">
+                        View PR #{run.prNumber || ""}
+                      </a>
+                      {run.emailDeliveryState !== "sent" && <span>confirmation email not delivered - open the PR directly</span>}
+                      {run.status === "needs-human" && run.confirmationState === "pending" && (
+                        <span>
+                          <button disabled={!!busy} onClick={() => void confirmMerge(run, "approve")} type="button">
+                            Approve
+                          </button>{" "}
+                          <button disabled={!!busy} onClick={() => void confirmMerge(run, "reject")} type="button">
+                            Reject
+                          </button>
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="runs-empty">
+              <span className="empty-line" />
+              <strong>No runs yet</strong>
+              <p>Runs show up here after you dispatch a task.</p>
+            </div>
+          )}
+          {events.length > 0 && (
+            <div className="events-preview">
+              <strong>Run events</strong>
+              {events.slice(-3).map((event, index) => (
+                <span key={event.id || index}>{event.eventType || "event"}</span>
+              ))}
+            </div>
+          )}
+        </section>
       </main>
-      {githubOpen && <div className="simple-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setGithubOpen(false); }}><div className="simple-modal" role="dialog" aria-modal="true" aria-labelledby="github-title"><button className="modal-close" onClick={() => setGithubOpen(false)} type="button">×</button><span className="github-symbol large">GH</span><h2 id="github-title">绑定 GitHub 仓库</h2><p>仅显示服务端允许且当前令牌可访问的仓库。需要推送权限才能绑定；完成后由签名执行器回调创建 PR。</p>{githubLoading && <p>正在加载允许的仓库…</p>}{githubError && <div className="error-state"><strong>无法加载仓库</strong><span>{githubError}</span><button onClick={() => void openGitHubBinding()} type="button">重试</button></div>}{!githubLoading && !githubError && githubRepositories.length === 0 && <div className="modal-note">没有可访问的允许仓库。请让管理员检查 GitHub 令牌和仓库允许列表。</div>}{!githubLoading && !githubError && githubRepositories.map((repo) => <div className="config-line" key={repo.fullName}><span><strong>{repo.fullName}</strong><small>{repo.defaultBranch} · {repo.private ? "私有" : "公开"} · {repo.canPush ? "可推送" : "只读"}</small></span><button disabled={!repo.canPush || !!busy} onClick={() => void bindRepository(repo)} type="button">{repo.canPush ? "绑定" : "需要推送权限"}</button></div>)}<div className="modal-note">批准或拒绝只记录确认决定，不会自动合并 PR。</div></div></div>}
-      {toast && <div className={`workspace-toast ${toastError ? "error" : ""}`} role="status">{toast}</div>}
+
+      {draft && (
+        <div className="simple-modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setDraft(null)}>
+          <div className="simple-modal wide" role="dialog" aria-modal="true" aria-labelledby="task-title">
+            <button className="modal-close" onClick={() => setDraft(null)} type="button">
+              ×
+            </button>
+            <span className="github-symbol large">{draft.mode === "edit" ? "✎" : "＋"}</span>
+            <h2 id="task-title">{draft.mode === "edit" ? "Edit task" : "New task"}</h2>
+            <Field label="Task name">
+              <input
+                value={draft.name}
+                disabled={draft.mode === "edit"}
+                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                placeholder="e.g. fix-stale-docs"
+              />
+            </Field>
+            <Field label="Repository">
+              {github.connected ? (
+                <select value={draft.repoUrl} onChange={(e) => setDraft({ ...draft, repoUrl: e.target.value })}>
+                  <option value="">Select a GitHub repository…</option>
+                  {repos.map((repo) => (
+                    <option key={repo.htmlUrl} value={repo.htmlUrl} disabled={!repo.canPush}>
+                      {repo.fullName} · {repo.defaultBranch}
+                      {repo.canPush ? "" : " (read-only)"}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="modal-note">
+                  GitHub is not connected yet. <a href="/api/v1/github/connect">Connect GitHub</a>, then come back to pick a repository.
+                </div>
+              )}
+            </Field>
+            <Field label="Task goal">
+              <textarea
+                className="goal-input"
+                value={draft.goal}
+                onChange={(e) => setDraft({ ...draft, goal: e.target.value })}
+                placeholder="Describe the outcome, scope and limits. Example: find outdated API doc examples and only touch docs/."
+                rows={4}
+              />
+            </Field>
+            <Field label="Acceptance command (optional - must pass to complete)">
+              <input
+                className="mono"
+                value={draft.verifier}
+                onChange={(e) => setDraft({ ...draft, verifier: e.target.value })}
+                placeholder="npm test"
+              />
+            </Field>
+            <Field label="Schedule">
+              <div className="schedule-options">
+                <button
+                  className={`schedule-option ${!draft.resident ? "selected" : ""}`}
+                  onClick={() => setDraft({ ...draft, resident: false })}
+                  type="button"
+                >
+                  <span className="schedule-icon">→</span>
+                  <span>
+                    <strong>manualRun</strong>
+                    <small>Runs once when you click Run</small>
+                  </span>
+                  <i>{!draft.resident ? "✓" : ""}</i>
+                </button>
+                <button
+                  className={`schedule-option ${draft.resident ? "selected" : ""}`}
+                  onClick={() => setDraft({ ...draft, resident: true })}
+                  type="button"
+                >
+                  <span className="schedule-icon">↻</span>
+                  <span>
+                    <strong>Recurring</strong>
+                    <small>Keeps waking up on a fixed interval</small>
+                  </span>
+                  <i>{draft.resident ? "✓" : ""}</i>
+                </button>
+              </div>
+              {draft.resident && (
+                <div className="interval-field">
+                  <label htmlFor="interval">Interval</label>
+                  <div>
+                    <input
+                      id="interval"
+                      min={60}
+                      type="number"
+                      value={draft.intervalSeconds}
+                      onChange={(e) => setDraft({ ...draft, intervalSeconds: Number(e.target.value) || 60 })}
+                    />
+                    <span>s · every {formatInterval(draft.intervalSeconds)}</span>
+                  </div>
+                </div>
+              )}
+            </Field>
+            <div className="form-actions" style={{ padding: "15px 0 0", background: "transparent" }}>
+              <button className="secondary-button" disabled={!!busy} onClick={() => void saveTask(false)} type="button">
+                Save only
+              </button>
+              <button className="run-button" disabled={!!busy} onClick={() => void saveTask(true)} type="button">
+                {busy === "dispatch" ? "Dispatching…" : draft.mode === "edit" ? "Save and run" : "Create and run"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className={`workspace-toast ${toastError ? "error" : ""}`} role="status">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
-  return <div className="field"><label>{label}</label>{children}</div>;
+  return (
+    <div className="field">
+      <label>{label}</label>
+      {children}
+    </div>
+  );
 }
-function normalizeVerifiers(value: AnyRecord[] | undefined): VerifierDraft[] {
-  return (value || []).map((item) => ({ name: item.name || "test", command: Array.isArray(item.command) ? item.command.join(" ") : String(item.command || ""), timeoutSeconds: Number(item.timeoutSeconds || 300) }));
-}
+
 function statusLabel(status: string) {
-  return ({ queued: "等待派发", running: "已发送至 Agent cell", passed: "已通过", failed: "失败", "needs-human": "待人工" } as Record<string, string>)[status] || status || "未知";
+  return (
+    (
+      {
+        queued: "Queued",
+        running: "Running",
+        passed: "Passed",
+        failed: "Failed",
+        "needs-human": "Needs approval",
+      } as Record<string, string>
+    )[status] || status || "Unknown"
+  );
 }
+
 function formatInterval(seconds: number) {
-  if (seconds >= 3600 && seconds % 3600 === 0) return `${seconds / 3600} 小时`;
-  if (seconds >= 60 && seconds % 60 === 0) return `${seconds / 60} 分钟`;
-  return `${seconds} 秒`;
+  if (seconds >= 3600 && seconds % 3600 === 0) return `${seconds / 3600} h`;
+  if (seconds >= 60 && seconds % 60 === 0) return `${seconds / 60} min`;
+  return `${seconds} s`;
 }
+
 function formatDate(value: string) {
-  try { return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); } catch { return value; }
+  try {
+    return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(
+      new Date(value),
+    );
+  } catch {
+    return value;
+  }
 }
