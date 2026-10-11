@@ -89,14 +89,26 @@ async function report(task, success, summary, headBranch, headSha) {
     headSha: headSha || "0".repeat(40),
     summary: redact(summary).slice(0, 10_000),
   });
-  const response = await fetch(task.callback.url, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...sign(SECRET, body) },
-    body,
-    signal: AbortSignal.timeout(30_000),
-  });
-  const text = await response.text();
-  console.log(`run ${task.runId}: reported success=${success} → HTTP ${response.status} ${redact(text)}`);
+  // Network here is flaky (intermittent DNS pollution): retry before giving up.
+  let lastError;
+  for (const delayMs of [0, 5_000, 15_000]) {
+    if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+    try {
+      const response = await fetch(task.callback.url, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...sign(SECRET, body) },
+        body,
+        signal: AbortSignal.timeout(30_000),
+      });
+      const text = await response.text();
+      console.log(`run ${task.runId}: reported success=${success} → HTTP ${response.status} ${redact(text)}`);
+      return;
+    } catch (error) {
+      lastError = error;
+      console.log(`run ${task.runId}: report attempt failed - ${redact(error.message)}`);
+    }
+  }
+  throw lastError;
 }
 
 async function git(cwd, args, timeout = 120_000) {
@@ -104,12 +116,18 @@ async function git(cwd, args, timeout = 120_000) {
 }
 
 async function gitRaw(args, timeout = 120_000) {
-  try {
-    const { stdout } = await exec("git", args, { timeout, maxBuffer: 8 * 1024 * 1024 });
-    return { ok: true, output: stdout };
-  } catch (error) {
-    return { ok: false, output: redact(String(error.stdout || "") + error.message) };
+  let last;
+  // Clone/push go over the flaky network too: retry before declaring failure.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 5_000));
+    try {
+      const { stdout } = await exec("git", args, { timeout, maxBuffer: 8 * 1024 * 1024 });
+      return { ok: true, output: stdout };
+    } catch (error) {
+      last = { ok: false, output: redact(String(error.stdout || "") + error.message) };
+    }
   }
+  return last;
 }
 
 async function runCommand(command, cwd, timeoutSeconds, taskFile) {
@@ -212,7 +230,13 @@ async function main() {
       await execute(task);
     } catch (error) {
       console.error(`run ${task.runId}: ${redact(error.message)}`);
-      await report(task, false, `executor error: ${error.message}`);
+      try {
+        await report(task, false, `executor error: ${error.message}`);
+      } catch (reportError) {
+        // Never die on a report failure — the run stays visible in the
+        // dashboard and can be requeued manually.
+        console.error(`run ${task.runId}: final report failed: ${redact(reportError.message)}`);
+      }
     }
     if (once) return;
   }
