@@ -497,7 +497,7 @@ async function accessibleRepositories(config) {
   for (let page = 1; page <= 10; page++) {
     const batch = await githubRequest(
       config,
-      `user/repos?per_page=100&page=${page}&affiliation=collaborator,organization_member,organization_owner`,
+      `user/repos?per_page=100&page=${page}&affiliation=owner,collaborator,organization_member`,
     );
     for (const repo of batch) {
       repositories.push({
