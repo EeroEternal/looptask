@@ -163,16 +163,14 @@ export function Workspace({ user, onLogout }: { user: User; onLogout: () => void
           <small>task runner</small>
         </div>
         <div className="header-actions">
-          {github.connected ? (
-            <span className="header-status" title="GitHub connected">
-              <i />
-              GH · {github.login || "connected"}
-            </span>
-          ) : (
-            <a className="run-button" href="/api/v1/github/connect">
-              Connect GitHub
-            </a>
-          )}
+          <a
+            className={github.connected ? "header-status" : "run-button"}
+            title="GitHub connected — click to re-authorize after changing installations"
+            href="/api/v1/github/connect"
+          >
+            <i />
+            GH · {github.connected ? github.login || "connected" : "Connect"}
+          </a>
           <span className="user-name">{displayName}</span>
           <button className="logout-link" onClick={onLogout} type="button">
             Log out

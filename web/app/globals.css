@@ -368,7 +368,7 @@ input:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3p
 .wordmark-mark { display:grid; place-items:center; width:29px; height:29px; border-radius:8px; background:#173d2a; color:#d8f0df; font:700 11px ui-monospace,monospace; letter-spacing:-.08em; }
 .wordmark small { margin-left:3px; color:var(--ink-faint); font:500 10px ui-monospace,monospace; letter-spacing:.04em; }
 .header-actions { display:flex; align-items:center; gap:18px; color:var(--ink-faint); font-size:11px; }
-.header-status { display:flex; align-items:center; gap:7px; }
+.header-status, a.header-status { display:flex; text-decoration:none; color:inherit; align-items:center; gap:7px; }
 .header-status i { width:6px; height:6px; border-radius:50%; background:var(--success); box-shadow:0 0 0 4px var(--success-soft); }
 .user-name { color:var(--ink-dim); font-weight:650; }
 .logout-link { border:0; background:transparent; color:var(--ink-faint); font-size:11px; padding:4px; }
