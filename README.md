@@ -140,6 +140,23 @@ and can be revoked on logout. Email sending (Cloudflare Email Sending, via
 `CLOUDFLARE_API_TOKEN` + `LOOPTASK_EMAIL_FROM`) is used only for PR
 confirmation mail.
 
+### Mentora integration
+
+`POST /api/v1/mentora/import` pulls a task from
+[Mentora](https://mentora.pub) (share link or id + its per-task `mtk_` token
++ a target repository), stores it as a looptask task with the token
+**encrypted at rest**, and dispatches it. When the executor finishes and
+looptask opens the PR, the run's completion callback writes the result back:
+
+```
+POST https://mentora.pub/api/v1/tasks/<id>/process
+{ process_status: "completed", process_result: <markdown + PR link>,
+  result_artifacts: "[{\"name\":\"PR #n\",\"url\":...}]" }
+```
+
+A failed write-back records a `mentora_result_failed` event and never fails
+the completion (the PR already exists). Dashboard: **Import from Mentora**.
+
 ### Executor completion callback and PR confirmation
 
 After dispatch, the executor calls `POST /api/v1/runs/{runId}/completion` with

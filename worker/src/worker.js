@@ -645,7 +645,7 @@ async function completionContext(env, runId) {
             p.repository, p.default_branch, r.loop_name,
             COALESCE(json_extract(ld.definition_json, '$.goal'), '') AS goal,
             COALESCE(json_extract(ld.definition_json, '$.resultTarget'), 'pr') AS result_target, r.status, r.dispatch_id,
-            r.callback_id, r.pr_number, r.pr_url, r.confirmation_email_sent_at,
+            r.callback_id, r.pr_number, r.pr_url, r.confirmation_email_sent_at, r.request_json,
             r.completion_processing, r.completion_processing_at, r.email_delivery_state
      FROM loop_runs r JOIN users u ON u.id = r.user_id
      JOIN projects p ON p.id = r.project_id
@@ -938,6 +938,7 @@ async function executorCompletion(env, request, runId) {
     `Automated task: ${context.goal}\n\n${completion.summary}`,
   );
   await persistPr(env, runId, pr.number, pr.html_url, completion.headBranch, completion.headSha, completion.summary);
+  await writeBackMentora(env, runId, context.request_json, pr.number, pr.html_url, completion.summary);
   // The completed callback is durable before mail is sent; normal retries
   // observe the persisted PR and never open a second pull request.
   await deliverConfirmationEmail(env, runId, context, pr.html_url);
@@ -1193,6 +1194,142 @@ async function githubStatus(env, auth) {
 }
 
 // ---------------------------------------------------------------------------
+// Mentora integration (https://mentora.pub — task workflow, see /docs/guide.md)
+// ---------------------------------------------------------------------------
+
+function parseMentoraTaskId(value) {
+  const raw = String(value || "").trim();
+  let id = raw;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      id = new URL(raw).searchParams.get("task") || "";
+    } catch {
+      id = "";
+    }
+  }
+  if (!/^[A-Za-z0-9_-]{4,64}$/.test(id)) {
+    throw configError("invalid mentora task id or share link");
+  }
+  return id;
+}
+
+function mentoraProcessPayload(prNumber, prUrl, summary) {
+  return JSON.stringify({
+    process_status: "completed",
+    process_result: `**looptask completed this task** — pull request [#${prNumber}](${prUrl}).\n\n${summary}`,
+    result_artifacts: JSON.stringify([{ name: `PR #${prNumber}`, url: prUrl }]),
+  });
+}
+
+async function mentoraImport(env, auth, request, body) {
+  const taskId = parseMentoraTaskId(body.shareUrl || body.taskId);
+  const taskToken = String(body.taskToken || "").trim();
+  if (!taskToken) throw configError("mentora task token (mtk_...) is required");
+  const repositoryUrl = String(body.repository || "").trim();
+  parseRepository(repositoryUrl);
+
+  const base = (env.MENTORA_URL || "https://mentora.pub").replace(/\/+$/, "");
+  const response = await fetch(`${base}/api/v1/tasks/${encodeURIComponent(taskId)}`, {
+    headers: { authorization: `Bearer ${taskToken}` },
+    signal: AbortSignal.timeout(15_000),
+  }).catch((error) => {
+    throw new ApiError(502, `mentora unreachable: ${error.message}`);
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const message = payload.error?.message || `mentora responded with ${response.status}`;
+    if (response.status === 404) throw notFound(message);
+    if (response.status === 401 || response.status === 403) throw unauthorized(message);
+    throw new ApiError(502, message);
+  }
+  const task = await response.json();
+
+  const name = `mentora-${taskId}`;
+  const project = {
+    name,
+    repository: repositoryUrl,
+    defaultBranch: String(body.defaultBranch || "main"),
+    techStack: [],
+    docs: [],
+    sourcePaths: [],
+    _mentora: {
+      taskId,
+      url: `${base}/tasks?task=${taskId}`,
+      title: String(task.title || ""),
+      // Encrypted at rest; flows into the run request via the project payload.
+      taskToken: await encryptSecret(env, taskToken),
+    },
+    loops: [
+      {
+        name,
+        kind: task.task_type || "general",
+        goal: `Mentora task: ${task.title || taskId}\n\n${task.description || ""}`,
+        summary: "",
+        mode: "human-gated",
+        resultTarget: "pr",
+        trigger: { type: "manual" },
+        agent: {
+          cellIdTemplate: "{project}/{loop}/{agent}",
+          sandboxRequired: true,
+          allowedTools: ["read-repo"],
+          humanGate: true,
+        },
+        verifiers: [],
+        state: { hotSqliteScope: "agent-cell", artifactUriPrefix: "r2://looptask/agents/{agent}/artifacts/", hotMessageLimit: 50 },
+        stopRules: { maxSteps: 12, maxConsecutiveFailures: 3, largeFileLines: 500 },
+        escalationRules: [],
+        steps: [
+          {
+            id: "execute-task",
+            title: `Mentora: ${task.title || taskId}`,
+            purpose: task.description || "",
+            command: [],
+            allowedPaths: [],
+            forbiddenActions: ["push-main", "merge-pr", "create-tag"],
+          },
+        ],
+        decisionRules: [],
+        budget: { maxDurationMinutes: 30, maxToolCalls: 200 },
+        safety: {
+          protectedBranches: [String(body.defaultBranch || "main")],
+          allowedPaths: [],
+          forbiddenActions: [],
+          cleanupPolicy: "remove-worktree",
+        },
+      },
+    ],
+  };
+  const projectId = await saveProject(env, auth.id, project);
+  return json({
+    task: { id: taskId, title: task.title, taskType: task.task_type, status: task.status, url: project._mentora.url },
+    project: { ...project, id: projectId },
+  });
+}
+
+// Best-effort write-back: never fails the completion (the PR already exists).
+async function writeBackMentora(env, runId, requestJson, prNumber, prUrl, summary) {
+  const mentora = requestJson?.project?._mentora;
+  if (!mentora?.taskId || !mentora?.taskToken) return;
+  try {
+    const token = await decryptSecret(env, mentora.taskToken);
+    const base = (env.MENTORA_URL || "https://mentora.pub").replace(/\/+$/, "");
+    const response = await fetch(`${base}/api/v1/tasks/${encodeURIComponent(mentora.taskId)}/process`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: mentoraProcessPayload(prNumber, prUrl, summary),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) {
+      throw new Error(`mentora responded with ${response.status}: ${await response.text()}`);
+    }
+    await appendEvent(env, runId, "mentora_result_written", { taskId: mentora.taskId, prNumber });
+  } catch (error) {
+    console.error("mentora write-back failed", error);
+    await appendEvent(env, runId, "mentora_result_failed", { taskId: mentora.taskId, reason: String(error.message || error) });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // router
 // ---------------------------------------------------------------------------
 
@@ -1244,6 +1381,10 @@ async function route(request, env) {
   if (!user) throw unauthorized("please log in first");
   const auth = user.user;
 
+  if (method === "POST" && path === "/api/v1/mentora/import") {
+    const body = await request.json().catch(() => ({}));
+    return mentoraImport(env, auth, request, body);
+  }
   if (method === "GET" && path === "/api/v1/loop-templates") {
     return json(templates());
   }
@@ -1371,4 +1512,4 @@ async function getProject(env, auth, projectId) {
 }
 
 // exported for tests only
-export { encryptSecret, decryptSecret, hashPassword, verifyPassword, validBranch, validComponent, parseRepository, validateCompletion, hmacVerify, hmacHex, parseSenderAddress, validateLoop, buildLoopPlan, agentCellId, executorTask };
+export { encryptSecret, decryptSecret, hashPassword, verifyPassword, parseMentoraTaskId, mentoraProcessPayload, validBranch, validComponent, parseRepository, validateCompletion, hmacVerify, hmacHex, parseSenderAddress, validateLoop, buildLoopPlan, agentCellId, executorTask };

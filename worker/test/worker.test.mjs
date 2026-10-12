@@ -5,6 +5,8 @@ import {
   decryptSecret,
   hashPassword,
   verifyPassword,
+  parseMentoraTaskId,
+  mentoraProcessPayload,
   validBranch,
   parseRepository,
   validateCompletion,
@@ -14,6 +16,21 @@ import {
   buildLoopPlan,
   agentCellId,
 } from "../src/worker.js";
+
+test("mentora share links and ids parse strictly", () => {
+  assert.equal(parseMentoraTaskId("task-1a2b3c4d5e6f"), "task-1a2b3c4d5e6f");
+  assert.equal(parseMentoraTaskId("https://mentora.pub/tasks?task=task-abc123"), "task-abc123");
+  assert.throws(() => parseMentoraTaskId(""));
+  assert.throws(() => parseMentoraTaskId("https://mentora.pub/tasks"));
+  assert.throws(() => parseMentoraTaskId("../../etc/passwd"));
+});
+
+test("mentora process payload carries PR link and artifacts", () => {
+  const payload = JSON.parse(mentoraProcessPayload(42, "https://github.com/acme/r/pull/42", "fixed the crash"));
+  assert.equal(payload.process_status, "completed");
+  assert.match(payload.process_result, /pull\/42/);
+  assert.deepEqual(JSON.parse(payload.result_artifacts), [{ name: "PR #42", url: "https://github.com/acme/r/pull/42" }]);
+});
 
 test("password hashing verifies and rejects wrong passwords", async () => {
   const { salt, hash } = await hashPassword("correct-horse-battery");

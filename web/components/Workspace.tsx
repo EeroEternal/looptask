@@ -38,6 +38,11 @@ export function Workspace({ user, onLogout }: { user: User; onLogout: () => void
   const [runs, setRuns] = useState<Run[]>([]);
   const [events, setEvents] = useState<AnyRecord[]>([]);
   const [github, setGithub] = useState<{ connected: boolean; login?: string }>({ connected: false });
+  const [importOpen, setImportOpen] = useState(false);
+  const [shareUrl, setShareUrl] = useState("");
+  const [taskToken, setTaskToken] = useState("");
+  const [repoUrl, setRepoUrl] = useState("");
+  const [importRepos, setImportRepos] = useState<any[]>([]);
   const [busy, setBusy] = useState("");
   const [toast, setToast] = useState("");
   const [toastError, setToastError] = useState(false);
@@ -71,6 +76,40 @@ export function Workspace({ user, onLogout }: { user: User; onLogout: () => void
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "failed to load workspace");
     }
+  }
+
+  async function openImport() {
+    setImportOpen(true);
+    if (github.connected && !importRepos.length) {
+      api<any[]>("/api/v1/github/repositories").then(setImportRepos).catch(() => setImportRepos([]));
+    }
+  }
+
+  async function importMentora() {
+    await action("mentora-import", async () => {
+      if (!shareUrl.trim()) throw new Error("paste the mentora share link");
+      if (!taskToken.trim()) throw new Error("task token (mtk_...) is required");
+      if (!repoUrl) throw new Error("select a repository");
+      const created = await api<AnyRecord>("/api/v1/mentora/import", {
+        method: "POST",
+        body: JSON.stringify({ shareUrl: shareUrl.trim(), taskToken: taskToken.trim(), repository: repoUrl }),
+      });
+      const result = await api<AnyRecord>("/api/v1/loops/dispatch", {
+        method: "POST",
+        body: JSON.stringify({
+          project: created.project,
+          loopName: created.project.name,
+          agentKey: "default",
+          idempotencyKey: crypto.randomUUID(),
+        }),
+      });
+      if (!result.accepted) throw new Error(result.reason || "task was not accepted by the run queue");
+      setImportOpen(false);
+      setShareUrl("");
+      setTaskToken("");
+      showToast(`mentora task "${created.task?.title || created.task?.id}" imported and dispatched`);
+      await loadAll();
+    });
   }
 
   async function runTask(task: Task) {
@@ -186,6 +225,9 @@ export function Workspace({ user, onLogout }: { user: User; onLogout: () => void
             <p className="intro-copy">Pick a repo, describe the goal, dispatch. The executor reports back for your confirmation.</p>
           </div>
           <div className="hero-actions">
+            <button className="secondary-button" disabled={!!busy} onClick={() => void openImport()} type="button">
+              Import from Mentora
+            </button>
             <a className="run-button dispatch-button" href="/new/">
               + New task
             </a>
@@ -319,6 +361,66 @@ export function Workspace({ user, onLogout }: { user: User; onLogout: () => void
           )}
         </section>
       </main>
+
+      {importOpen && (
+        <div className="simple-modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setImportOpen(false)}>
+          <div className="simple-modal wide" role="dialog" aria-modal="true" aria-labelledby="mentora-title">
+            <button className="modal-close" onClick={() => setImportOpen(false)} type="button">
+              ×
+            </button>
+            <span className="github-symbol large">M</span>
+            <h2 id="mentora-title">Import from Mentora</h2>
+            <p>
+              Paste the task share link and its task token; looptask runs the fix and writes the PR back to the task.
+            </p>
+            <div className="field">
+              <label>Share link or task id</label>
+              <input
+                value={shareUrl}
+                onChange={(e) => setShareUrl(e.target.value)}
+                placeholder="https://mentora.pub/tasks?task=task-..."
+              />
+            </div>
+            <div className="field">
+              <label>Task token (mtk_...)</label>
+              <input
+                className="mono"
+                type="password"
+                value={taskToken}
+                onChange={(e) => setTaskToken(e.target.value)}
+                placeholder="mtk_..."
+                autoComplete="off"
+              />
+            </div>
+            <div className="field">
+              <label>Repository to fix</label>
+              {github.connected ? (
+                <select value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)}>
+                  <option value="">Select a GitHub repository…</option>
+                  {importRepos.map((repo) => (
+                    <option key={repo.htmlUrl} value={repo.htmlUrl} disabled={!repo.canPush}>
+                      {repo.fullName} · {repo.defaultBranch}
+                      {repo.canPush ? "" : " (read-only)"}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="modal-note">
+                  GitHub is not connected yet. <a href="/api/v1/github/connect">Connect GitHub</a>, then come back.
+                </div>
+              )}
+            </div>
+            <div className="form-actions" style={{ padding: "15px 0 0", background: "transparent" }}>
+              <button className="secondary-button" disabled={!!busy} onClick={() => setImportOpen(false)} type="button">
+                Cancel
+              </button>
+              <button className="run-button" disabled={!!busy} onClick={() => void importMentora()} type="button">
+                {busy === "mentora-import" ? "Importing…" : "Import and run"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div className={`workspace-toast ${toastError ? "error" : ""}`} role="status">
