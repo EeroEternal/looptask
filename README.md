@@ -90,9 +90,14 @@ definition into stages and guardrails.
 `POST /api/v1/loops/dispatch` saves the project, creates a durable run record
 plus a `queued` event in D1, and hands the task to an executor:
 
-1. **pull model** (default, recommended): the run stays `queued` in D1 and a
-   sandbox executor claims it via `GET /api/v1/executions/next`. No public
-   endpoint is needed on the executor side.
+1. **pull model** (default, recommended): fix/PR tasks (`resultTarget: pr`)
+   stay `queued` in D1 for a sandbox executor to claim via
+   `GET /api/v1/executions/next`. Report tasks (`resultTarget: issue`)
+   dispatch to the **celadon runner** instead when `CELADON_API_KEY` is set:
+   looptask points celadon's linked repo at the task repo, sends the task,
+   and on settlement files the analysis as a GitHub issue (degrading to a
+   summary-only pass when GitHub is unavailable), then **restores celadon's
+   previous repo** so its own watchdog keeps its target.
 2. **push model** (`LOOPTASK_EXECUTOR_URL` set): the dispatch payload (loop,
    goal, steps, verifiers, safety, `runId`, and the `completionCallback`
    protocol) is POSTed to that endpoint immediately.
@@ -126,6 +131,7 @@ Secrets (`npx wrangler secret put <NAME>` in `worker/`, values grant power):
   (guards both the claim endpoint and the completion callback)
 - `GITHUB_CLIENT_SECRET` — GitHub App OAuth client secret
 - `CLOUDFLARE_API_TOKEN` — Cloudflare Email Sending (PR confirmation mail)
+- `CELADON_API_KEY` — the celadon runner access key (report-task dispatch)
 
 Vars (`[vars]` in `worker/wrangler.toml`, not secret):
 

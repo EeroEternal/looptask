@@ -8,7 +8,7 @@ database_name = "looptask"
 database_id = "fcaece73-31a3-4de1-a5db-2188356ac5da"
 
 # Plain configuration — none of this is secret. Real secrets only:
-#   wrangler secret put SESSION_SECRET LOOPTASK_EXECUTOR_SECRET GITHUB_CLIENT_SECRET CLOUDFLARE_API_TOKEN
+#   wrangler secret put SESSION_SECRET LOOPTASK_EXECUTOR_SECRET GITHUB_CLIENT_SECRET CLOUDFLARE_API_TOKEN CELADON_API_KEY
 [vars]
 CLOUDFLARE_ACCOUNT_ID = "f073aa10866fbb6c4f213d62bee54acb"
 # Verified sender address for Cloudflare Email Sending (PR confirmation mail):

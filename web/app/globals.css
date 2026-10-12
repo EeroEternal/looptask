@@ -515,3 +515,7 @@ input:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3p
   .timeout-label { display: none; }
   .dialog-heading, .dialog-body { padding-left: 18px; padding-right: 18px; }
 }
+/* Run result preview (report tasks: celadon reply / executor summary) */
+.events-preview.run-summary { display:block; color:var(--ink-dim); font-family:inherit; }
+.events-preview.run-summary strong { display:block; margin-bottom:5px; }
+.events-preview.run-summary span { white-space:pre-wrap; padding:0; background:transparent; line-height:1.55; word-break:break-word; max-height:9em; overflow:hidden; display:block; }

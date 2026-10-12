@@ -320,6 +320,15 @@ export function Workspace({ user, onLogout }: { user: User; onLogout: () => void
                     <b>{run.status === "needs-human" && run.confirmationState === "pending" ? "awaiting approval" : statusLabel(run.status)}</b>
                     <span className="run-arrow">→</span>
                   </button>
+                  {run.completionSummary && (
+                    <div className="events-preview run-summary">
+                      <strong>Result{run.mentoraTitle ? ` · ${run.mentoraTitle}` : ""}</strong>
+                      <span>
+                        {run.completionSummary.slice(0, 500)}
+                        {run.completionSummary.length > 500 ? "…" : ""}
+                      </span>
+                    </div>
+                  )}
                   {run.prUrl && (
                     <div className="events-preview">
                       <a href={run.prUrl} target="_blank" rel="noreferrer">

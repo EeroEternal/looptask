@@ -7,6 +7,9 @@ import {
   verifyPassword,
   parseMentoraTaskId,
   mentoraProcessPayload,
+  celadonDispatchId,
+  parseCeladonDispatchId,
+  celadonSettlement,
   validBranch,
   parseRepository,
   validateCompletion,
@@ -16,6 +19,31 @@ import {
   buildLoopPlan,
   agentCellId,
 } from "../src/worker.js";
+
+test("celadon dispatch id round-trips including empty prev repo", () => {
+  const id = celadonDispatchId("smabc123", "sub_01XYZ", "EeroEternal/xgateway");
+  assert.deepEqual(parseCeladonDispatchId(id), {
+    sessionId: "smabc123",
+    submissionId: "sub_01XYZ",
+    prevRepo: "EeroEternal/xgateway",
+  });
+  const noRestore = celadonDispatchId("smabc123", "sub_01XYZ", "");
+  assert.equal(parseCeladonDispatchId(noRestore).prevRepo, "");
+  assert.equal(parseCeladonDispatchId("exec-not-celadon"), null);
+  assert.equal(parseCeladonDispatchId("celadon:only-two"), null);
+});
+
+test("celadon settlement finds our reply", () => {
+  const history = {
+    messages: [
+      { role: "assistant", submissionId: "sub_other", parts: [{ text: "unrelated" }] },
+      { role: "assistant", submissionId: "sub_1", parts: [{ text: "结论：" }, { text: "没问题" }] },
+    ],
+    settlements: [{ submissionId: "sub_1", outcome: "completed" }],
+  };
+  assert.deepEqual(celadonSettlement(history, "sub_1"), { outcome: "completed", reply: "结论：没问题" });
+  assert.equal(celadonSettlement(history, "sub_other"), null);
+});
 
 test("mentora share links and ids parse strictly", () => {
   assert.equal(parseMentoraTaskId("task-1a2b3c4d5e6f"), "task-1a2b3c4d5e6f");

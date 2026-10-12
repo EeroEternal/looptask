@@ -971,6 +971,31 @@ async function dispatchLoop(env, user, request) {
     });
   }
 
+  const celadonRunner = celadonConfig(env);
+  if (loopDef.resultTarget === "issue" && celadonRunner) {
+    let dispatched;
+    try {
+      dispatched = await dispatchToCeladon(celadonRunner, project, loopDef, run.id);
+    } catch (error) {
+      await markFailed(env, run.id, String(error.message || error));
+      throw error;
+    }
+    await markRunning(env, run.id, celadonDispatchId(dispatched.sessionId, dispatched.submissionId, dispatched.prevRepo));
+    return json({
+      accepted: true,
+      reason: "loop dispatched to the celadon runner (report type)",
+      loopPlan,
+      dispatch: {
+        accepted: true,
+        id: dispatched.submissionId,
+        sessionId: dispatched.sessionId,
+        url: celadonRunner.base,
+      },
+      runId: run.id,
+      deduplicated: false,
+    });
+  }
+
   const dispatchUrl = env.LOOPTASK_EXECUTOR_URL;
   const event = {
     id: `run-${run.id}`,
@@ -1330,6 +1355,172 @@ async function writeBackMentora(env, runId, requestJson, prNumber, prUrl, summar
 }
 
 // ---------------------------------------------------------------------------
+// celadon runner (https://celadon.chat — general runner, see its /llms.txt)
+// Report-type tasks route here; fix/PR tasks stay on the sandbox executor.
+// ---------------------------------------------------------------------------
+
+function celadonConfig(env) {
+  const key = env.CELADON_API_KEY;
+  if (!key) return null;
+  return { base: (env.CELADON_URL || "https://celadon.chat").replace(/\/+$/, ""), key };
+}
+
+async function celadonRequest(config, path, options = {}) {
+  const response = await fetch(`${config.base}${path}`, {
+    ...options,
+    signal: AbortSignal.timeout(30_000),
+    headers: {
+      authorization: `Bearer ${config.key}`,
+      "content-type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  if (!response.ok) {
+    throw new ApiError(502, `celadon responded with ${response.status}: ${await response.text()}`);
+  }
+  return response.json();
+}
+
+// dispatch_id format: celadon:{sessionId}:{submissionId}:{prevRepo}
+// prevRepo is what celadon's config repo was before we pointed it at the task
+// repo — restored after the run so its own watchdog keeps its target.
+function celadonDispatchId(sessionId, submissionId, prevRepo) {
+  return `celadon:${sessionId}:${submissionId}:${prevRepo || ""}`;
+}
+
+function parseCeladonDispatchId(value) {
+  const parts = String(value || "").split(":");
+  if (parts.length !== 4 || parts[0] !== "celadon" || !parts[1] || !parts[2]) return null;
+  return { sessionId: parts[1], submissionId: parts[2], prevRepo: parts[3] };
+}
+
+// Pure: find our submission's settlement and the assistant reply in a
+// celadon `?view=history` payload.
+function celadonSettlement(history, submissionId) {
+  const settled = (history?.settlements || []).find((s) => s.submissionId === submissionId);
+  if (!settled) return null;
+  const reply = (history?.messages || [])
+    .filter((m) => m.role === "assistant" && m.submissionId === submissionId)
+    .map((m) => (m.parts || []).map((p) => p.text || "").join(""))
+    .join("\n")
+    .trim();
+  return { outcome: settled.outcome, reply };
+}
+
+function renderCeladonTask(project, loopDef, runId) {
+  const lines = [
+    `[looptask task] ${loopDef.name} (run ${runId})`,
+    `Goal: ${loopDef.goal || ""}`,
+    `Repository: ${project.repository || "(none)"} @ ${project.defaultBranch || "main"} — your repo tools read the linked repository.`,
+    `Mode: ${loopDef.mode || "report-only"}`,
+  ];
+  const steps = (loopDef.steps || []).map((s, i) => `${i + 1}. ${s.title || s.id} — ${s.purpose || ""}`);
+  if (steps.length) lines.push("Steps:", ...steps);
+  if (loopDef.budget) lines.push(`Budget: ${loopDef.budget.maxDurationMinutes} min / ${loopDef.budget.maxToolCalls} tool calls.`);
+  if (loopDef.safety?.protectedBranches?.length) {
+    lines.push(`Safety: never touch protected branches (${loopDef.safety.protectedBranches.join(", ")}); forbidden: ${(loopDef.safety.forbiddenActions || []).join(", ") || "none"}.`);
+  }
+  lines.push(
+    "Deliver a short conclusion-first report: findings, evidence (files/links), remaining actions. If a repo is not linked, do not pretend to have read it — analyze what the task provides (links via fetch).",
+  );
+  return lines.join("\n");
+}
+
+async function dispatchToCeladon(config, project, loopDef, runId) {
+  let prevRepo = "";
+  let switched = false;
+  const taskRepo = project.repository ? (() => { const r = parseRepository(project.repository); return `${r.owner}/${r.name}`; })() : "";
+  try {
+    if (taskRepo) {
+      const current = ((await celadonRequest(config, "/api/config")).repo || "").trim();
+      if (taskRepo.toLowerCase() !== current.toLowerCase()) {
+        prevRepo = current;
+        await celadonRequest(config, "/api/config", { method: "PUT", body: JSON.stringify({ repo: taskRepo }) });
+        switched = true;
+      }
+    }
+    const session = await celadonRequest(config, "/api/sessions", {
+      method: "POST",
+      body: JSON.stringify({ inheritFrom: "main", title: `${loopDef.name} (run ${runId})` }),
+    });
+    const accepted = await celadonRequest(config, `/agents/keeper/${session.id}`, {
+      method: "POST",
+      body: JSON.stringify({ kind: "user", body: renderCeladonTask(project, loopDef, runId) }),
+    });
+    return { sessionId: session.id, submissionId: accepted.submissionId, prevRepo: switched ? prevRepo : "" };
+  } catch (error) {
+    if (switched) {
+      await celadonRequest(config, "/api/config", { method: "PUT", body: JSON.stringify({ repo: prevRepo }) }).catch(() => {});
+    }
+    throw error;
+  }
+}
+
+// ponytail: celadon runs are synced when the dashboard loads runs (max 3 per
+// request, one global repo switch at a time) — swap for a cron if runs get
+// frequent. Completion = file the issue (owner's GitHub) or degrade to a
+// summary-only pass; the pre-run repo config is restored either way.
+async function syncCeladonRuns(env) {
+  const config = celadonConfig(env);
+  if (!config) return;
+  const { results } = await env.DB.prepare(
+    "SELECT id, user_id, loop_name, request_json, dispatch_id FROM loop_runs WHERE status = 'running' AND dispatch_id LIKE 'celadon:%' ORDER BY started_at DESC LIMIT 3",
+  ).all();
+  for (const row of results) {
+    const parsed = parseCeladonDispatchId(row.dispatch_id);
+    if (!parsed) continue;
+    try {
+      const history = await celadonRequest(config, `/agents/keeper/${parsed.sessionId}?view=history`);
+      const settled = celadonSettlement(history, parsed.submissionId);
+      if (!settled) continue;
+      const requestJson = JSON.parse(row.request_json || "{}");
+      const loopDef = (requestJson.project?.loops || []).find((l) => l.name === row.loop_name) || {};
+      const goal = loopDef.goal || "";
+      const reply = settled.reply || "(no reply)";
+      let issueUrl = "";
+      let issueNumber = null;
+      try {
+        const github = await userGithub(env, row.user_id);
+        const repository = parseRepository(requestJson.project?.repository || "");
+        const issue = await githubRequest(github, `repos/${repository.owner}/${repository.name}/issues`, {
+          method: "POST",
+          body: JSON.stringify({
+            title: `looptask: ${row.loop_name}`,
+            body: `**Goal:** ${goal}\n\n${reply.slice(0, 8000)}`,
+          }),
+        });
+        issueUrl = issue.html_url;
+        issueNumber = issue.number;
+        await appendEvent(env, row.id, "issue_created", { issueNumber, issueUrl });
+      } catch (issueError) {
+        // Degrade: the analysis is still delivered in the dashboard.
+        console.error("issue creation failed", issueError);
+        await appendEvent(env, row.id, "issue_failed", { reason: String(issueError.message || issueError) });
+      }
+      await env.DB.prepare(
+        `UPDATE loop_runs SET status = 'passed', ended_at = ?2, completion_summary = ?3,
+         pr_number = ?4, pr_url = ?5, completion_processing = 0 WHERE id = ?1`,
+      )
+        .bind(row.id, nowIso(), reply.slice(0, 2000), issueNumber, issueUrl || null)
+        .run();
+      await appendEvent(env, row.id, "completed", { runner: "celadon", outcome: settled.outcome });
+    } catch (error) {
+      console.error("celadon sync failed", error);
+      continue;
+    } finally {
+      if (parsed.prevRepo) {
+        await celadonRequest(config, "/api/config", { method: "PUT", body: JSON.stringify({ repo: parsed.prevRepo }) })
+          .then(() => appendEvent(env, row.id, "celadon_repo_restored", { repo: parsed.prevRepo }))
+          .catch((restoreError) => {
+            console.error("celadon repo restore failed", restoreError);
+            appendEvent(env, row.id, "celadon_restore_failed", { repo: parsed.prevRepo });
+          });
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // router
 // ---------------------------------------------------------------------------
 
@@ -1421,10 +1612,12 @@ async function route(request, env) {
   }
 
   if (method === "GET" && path === "/api/v1/runs") {
+    await syncCeladonRuns(env);
     const { results } = await env.DB.prepare(
       `SELECT r.id, p.name AS project_name, r.loop_name, r.status, r.agent_cell_id, r.started_at,
               r.ended_at, r.pr_number, r.pr_url, r.confirmation_state, r.email_delivery_state,
-              r.dispatch_id
+              r.dispatch_id, r.completion_summary,
+              json_extract(r.request_json, '$.project._mentora.title') AS mentora_title
        FROM loop_runs r JOIN projects p ON p.id = r.project_id
        WHERE r.user_id = ?1 ORDER BY r.started_at DESC LIMIT 50`,
     )
@@ -1443,6 +1636,8 @@ async function route(request, env) {
         prUrl: row.pr_url,
         confirmationState: row.confirmation_state,
         emailDeliveryState: row.email_delivery_state,
+        completionSummary: row.completion_summary,
+        mentoraTitle: row.mentora_title || null,
       })),
     );
   }
@@ -1512,4 +1707,4 @@ async function getProject(env, auth, projectId) {
 }
 
 // exported for tests only
-export { encryptSecret, decryptSecret, hashPassword, verifyPassword, parseMentoraTaskId, mentoraProcessPayload, validBranch, validComponent, parseRepository, validateCompletion, hmacVerify, hmacHex, parseSenderAddress, validateLoop, buildLoopPlan, agentCellId, executorTask };
+export { encryptSecret, decryptSecret, hashPassword, verifyPassword, parseMentoraTaskId, mentoraProcessPayload, celadonDispatchId, parseCeladonDispatchId, celadonSettlement, renderCeladonTask, validBranch, validComponent, parseRepository, validateCompletion, hmacVerify, hmacHex, parseSenderAddress, validateLoop, buildLoopPlan, agentCellId, executorTask };

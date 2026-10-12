@@ -208,7 +208,7 @@ export default function NewTaskPage() {
                   <span className="schedule-icon">!</span>
                   <span>
                     <strong>File a GitHub issue</strong>
-                    <small>The result is a report filed as an issue</small>
+                    <small>celadon analyzes and looptask files the report as an issue</small>
                   </span>
                   <i>{resultTarget === "issue" ? "✓" : ""}</i>
                 </button>
