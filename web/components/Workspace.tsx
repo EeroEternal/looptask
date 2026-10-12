@@ -211,6 +211,9 @@ export function Workspace({ user, onLogout }: { user: User; onLogout: () => void
             GH · {github.connected ? github.login || "connected" : "Connect"}
           </a>
           <span className="user-name">{displayName}</span>
+          <a className="logout-link" href="/settings/">
+            Settings
+          </a>
           <button className="logout-link" onClick={onLogout} type="button">
             Log out
           </button>

@@ -116,6 +116,9 @@ export default function NewTaskPage() {
             <i />
             GH · {github.connected ? github.login || "connected" : "Connect"}
           </a>
+          <a className="logout-link" href="/settings/">
+            Settings
+          </a>
           <a className="logout-link" href="/">
             Back to tasks
           </a>
